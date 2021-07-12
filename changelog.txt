@@ -14,7 +14,7 @@ that repo.
 # Future
 
 ## New Scripts
-- `modtools/build-now`: instantly completes unsuspended planned building constructions
+- `build-now`: instantly completes unsuspended planned building constructions
 
 ## Fixes
 - `quickfort`: allow machines (e.g. screw pumps) to be built on ramps just like DF allows
