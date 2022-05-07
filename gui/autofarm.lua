@@ -164,7 +164,7 @@ end
 local function get_fields(plant_data_elem, threshold, cur_alloc, next_alloc)
     return {
         plant_data_elem.name,   -- plant name
-        plant_data_elem.id,     -- plant id string
+        plant_data_elem.id,     -- plant id token (e.g. 'HELMET_PLUMP')
         threshold or 'Default', -- target threshold
         tostring(plant_data_elem.num_plants), -- plants on hand
         tostring(plant_data_elem.num_seeds),  -- seeds on hand
@@ -182,12 +182,14 @@ local function update_max_widths(max_field_widths, fields)
     end
 end
 
-local function get_format_str(widths)
-    local fmt = {}
-    for _,w in ipairs(widths) do
-        table.insert(fmt, ('%%%ds'):format(w))
+local function get_text(widths, fields)
+    local text = {}
+    for i,w in ipairs(widths) do
+        table.insert(text, {text=fields[i], width=w})
+        table.insert(text, '  ')
     end
-    return table.concat(fmt, '  ')
+    text[#text] = nil -- remove the last spacer
+    return text
 end
 
 function AutofarmDetails:init(args)
@@ -213,7 +215,7 @@ function AutofarmDetails:init(args)
             key='CUSTOM_ALT_P',
             initial_option=show_unplantable,
             text_pen=COLOR_GREY,
-            on_change=self:callback('update_setting', 'show_unplantable')}
+            on_change=self:callback('update_setting', 'show_unplantable')},
         widgets.Label{
             frame={t=1},
             text={'Default threshold: ',
@@ -225,6 +227,26 @@ function AutofarmDetails:init(args)
             view_id='list',
             frame={t=4},
             on_select=self:callback('edit_threshold')},
+        widgets.HotkeyLabel{
+            frame={b=0, l=1},
+            label='Clear threshold',
+            key='CUSTOM_R',
+            on_activate=self:callback('clear_threshold')},
+        widgets.HotkeyLabel{
+            frame={b=0, l=1=20},
+            label='Copy threshold',
+            key='CUSTOM_C',
+            on_activate=self:callback('copy_threshold')},
+        widgets.HotkeyLabel{
+            frame={b=0, l=35},
+            label='Paste threshold',
+            key='CUSTOM_P',
+            enabled=function() return self.clipboard end,
+            on_activate=self:callback('paste_threshold')},
+        widgets.Label{
+            frame={b=0, l=47},
+            text={': ', {text=function() return self.clipboard end}},
+            visible=function() return self.clipboard end},
         widgets.EditField{
             view_id='edit',
             frame={},
@@ -234,6 +256,10 @@ function AutofarmDetails:init(args)
     }
     
     self.refresh()
+end
+    
+function AutofarmDetails.onDismiss()
+    af.set_settings(self.settings)
 end
 
 function AutofarmDetails:refresh()
@@ -287,20 +313,29 @@ function AutofarmDetailss:update_threshold(val)
     self:refresh()
 end
 
+function AutofarmDetails:clear_threshold()
+    local obj = self.subviews.list.getSelected()
+    self.settings.thresholds[obj.plant_id] = nil
+    self:refresh()
+end
+    
+function AutofarmDetails:copy_threshold()
+    local obj = self.subviews.list.getSelected()
+    self.clipboard = self.settings.thresholds[obj.plant_id]
+end
+
+function AutofarmDetails:paste_threshold()
+    local obj = self.subviews.list.getSelected()
+    self.settings.thresholds[obj.plant_id] = self.clipboard
+    self:refresh()
+end
+
 function AutofarmDetails:onInput(keys)
     if self:inputToSubviews(keys) then
         return true
     end
 
-    if keys.CUSTOM_C then
-        -- copy current selected threshold
-    elseif keys.CUSTOM_P and self.clipboard then
-        -- paste threshold to selected list item
-        self:refresh()
-    elseif keys.CUSTOM_D then
-        -- set selected threshold to default
-        self:refresh()
-    elseif keys.LEAVESCREEN then
+    if keys.LEAVESCREEN then
         if self.subviews.edit.visible then
             self:cancel_edit_threshold()
         else
