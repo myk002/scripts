@@ -12,6 +12,10 @@ local gui = require('gui')
 local guidm = require('gui.dwarfmode')
 local widgets = require('gui.widgets')
 
+-- persist these between invocations
+show_unavailable = show_unavailable or false
+show_unplantable = show_unplantable or false
+
 local function is_tile_aboveground(pos)
     local flags = dfhack.maps.getTileFlags(pos)
     return not flags.subterranean
@@ -138,29 +142,149 @@ AutofarmDetails = defclass(AutofarmDetails, gui.FramedScreen)
 AutofarmDetails.ATTRS {
     focus_path='autofarm/details',
     frame_style=gui.GREY_LINE_FRAME,
-    frame_inset=1,
+    frame_inset={l=1, r=1, b=1},
     frame_title='Autofarm Crop Threshold Details'
 }
 
--- formats the given parameters with the correct field widths for display
-local function make_details_line(name, id, threshold, seeds, plants, plantable)
-    -- plant name
-    -- plant id string
-    -- target threshold
-    -- plants on hand
-    -- seeds on hand
-    -- percent of map where this plant is plantable
-    -- farm plots currently allocated to this plant
-    -- plot tiles currently allocated to this plant
-    -- farm plots allocated to this plant on next update
-    -- plot tiles allocated to this plant on next update
+local function get_headers()
+    return {
+        'Plant name',
+        'Plant ID',
+        'Target threshold',
+        'Stockpiled plants',
+        'Stockpiled seeds',
+        '% of map where plantable',
+        'Current plots',
+        'Current tiles',
+        'New target plots',
+        'New target tiles',
+    }
+end
+
+local function get_fields(plant_data_elem, threshold, cur_alloc, next_alloc)
+    return {
+        plant_data_elem.name,   -- plant name
+        plant_data_elem.id,     -- plant id string
+        threshold or 'Default', -- target threshold
+        tostring(plant_data_elem.num_plants), -- plants on hand
+        tostring(plant_data_elem.num_seeds),  -- seeds on hand
+        tostring(plant_data_elem.percent_map_plantable) .. '%', -- percent of map where this plant is plantable
+        tostring(cur_alloc.plots),  -- farm plots currently allocated to this plant
+        tostring(cur_alloc.tiles),  -- plot tiles currently allocated to this plant
+        tostring(next_alloc.plots), -- farm plots allocated to this plant on next update
+        tostring(next_alloc.tiles), -- plot tiles allocated to this plant on next update
+    }
+end
+
+local function update_max_widths(max_field_widths, fields)
+    for i,f in ipairs(fields) do
+        max_field_widths[i] = math.max(max_field_widths[i] or 0, #f)
+    end
+end
+
+local function get_format_str(widths)
+    local fmt = {}
+    for _,w in ipairs(widths) do
+        table.insert(fmt, ('%%%ds'):format(w))
+    end
+    return table.concat(fmt, '  ')
 end
 
 function AutofarmDetails:init(args)
-    local settings = af.get_settings()
-    local plant_data = af.get_plant_data()
-    local next_allocs = af.dry_run(settings)
-    local cur_allocs = args.cur_allocs
+    self.plant_data = af.get_plant_data()
+    self.settings = af.get_settings()
+    self.cur_allocs = args.cur_allocs
+    
+    self:addviews{
+        widgets.Label{
+            frame={t=0, l=1},
+            text='Filters:',
+            text_pen=COLOR_GREY},
+        widgets.ToggleHotkeyLabel{
+            frame={t=0, l=12},
+            label='Show unavailable',
+            key='CUSTOM_ALT_A',
+            initial_option=show_unavailable,
+            text_pen=COLOR_GREY,
+            on_change=self:callback('update_setting', 'show_unavailable')},
+        widgets.ToggleHotkeyLabel{
+            frame={t=0, l=44},
+            label='Show unplantable',
+            key='CUSTOM_ALT_P',
+            initial_option=show_unplantable,
+            text_pen=COLOR_GREY,
+            on_change=self:callback('update_setting', 'show_unplantable')}
+        widgets.Label{
+            frame={t=1},
+            text={'Default threshold: ',
+                  {text=function() return self.settings.default_threshold end}},
+        widgets.Label{
+            view_id='header',
+            frame={t=2}},
+        widgets.List{
+            view_id='list',
+            frame={t=4},
+            on_select=self:callback('edit_threshold')},
+        widgets.EditField{
+            view_id='edit',
+            frame={},
+            visible=false,
+            on_char=function(ch) return ch:match('%d') end,
+            on_submit=self:callback('update_threshold')},
+    }
+    
+    self.refresh()
+end
+
+function AutofarmDetails:refresh()
+    local next_allocs = af.dry_run(self.settings)
+    
+    local max_field_widths = {}
+    local headers = get_headers()
+    update_max_widths(max_field_widths, headers)
+    
+    local line_fields = {}
+    for _,v in ipairs(plant_data) do
+        if not show_unavailable and v.num_seeds == 0 then goto continue end
+        if not show_unplantable and v.percent_map_plantable == 0 then goto continue end
+        local fields = get_fields(v, settings.thresholds[v.id], cur_allocs[v.id], next_allocs[v.id])
+        update_max_widths(max_field_widths, fields)
+        table.insert(line_fields, fields)
+        ::continue::
+    end
+    
+    local fmt = get_format_str(max_field_widths)
+    self.subviews.header.setText(fmt:format(table.unpack(headers)))
+
+    local lines = {}
+    for _,v in ipairs(lines) do
+        table.insert(lines, fmt:format(table.unpack(v)))
+    end
+    self.subviews.list.setChoices(lines)
+end
+
+function AutofarmDetails:update_setting(setting, value)
+    _ENV[setting] = value
+    self:refresh()
+end
+
+function AutofarmDetails:edit_threshold(idx, obj)
+    -- find the location of the threshold text on the screen
+    -- position an edit widget over the threshold text and initialize with the threshold
+    -- make edit widget visible
+    self.subviews.edit.visible = true
+end
+
+function AutofarmDetails:cancel_edit_threshold()
+    self.subviews.edit.visible = false
+end
+    
+function AutofarmDetailss:update_threshold(val)
+    val = tonumber(val)
+    -- TODO: set self.settings.thresholds[id] = val
+    -- hide the edit widget
+    self:cancel_edit_threshold()
+    self:refresh()
 end
 
 function AutofarmDetails:onInput(keys)
@@ -168,8 +292,20 @@ function AutofarmDetails:onInput(keys)
         return true
     end
 
-    if keys.LEAVESCREEN then
-        self:dismiss()
+    if keys.CUSTOM_C then
+        -- copy current selected threshold
+    elseif keys.CUSTOM_P and self.clipboard then
+        -- paste threshold to selected list item
+        self:refresh()
+    elseif keys.CUSTOM_D then
+        -- set selected threshold to default
+        self:refresh()
+    elseif keys.LEAVESCREEN then
+        if self.subviews.edit.visible then
+            self:cancel_edit_threshold()
+        else
+            self:dismiss()
+        end
     end
 end
 
