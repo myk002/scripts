@@ -137,6 +137,10 @@ local function get_plot_data(settings)
     }
 end
 
+--------------------------------
+-- Details screen
+--------------------------------
+
 AutofarmDetails = defclass(AutofarmDetails, gui.FramedScreen)
 AutofarmDetails.ATTRS {
     focus_path='autofarm/details',
@@ -181,8 +185,8 @@ local function update_max_widths(max_field_widths, fields)
     end
 end
 
-local function get_text(widths, fields)
-    local text = {}
+local function get_text_line(widths, fields)
+    local text = {plant_id=fields.plant_id}
     for i,w in ipairs(widths) do
         table.insert(text, {text=fields[i], width=w})
         table.insert(text, '  ')
@@ -219,14 +223,11 @@ function AutofarmDetails:init(args)
             initial_option=show_unplantable,
             text_pen=COLOR_GREY,
             on_change=self:callback('update_setting', 'show_unplantable')},
-        widgets.HotkeyLabel{
-            frame={t=1, l=1},
-            key='CUSTOM_D',
-            text='Default threshold:'}
         widgets.EditField{
             view_id='default_threshold',
-            frame={t=1, l=20},
-            active=false,
+            frame={t=1, l=1},
+            key='CUSTOM_D',
+            label='Default threshold',
             text=tostring(self.settings.default_threshold),
             on_char=digits_only,
             on_submit=self:callback('update_default_threshold')},
@@ -262,7 +263,8 @@ function AutofarmDetails:init(args)
             frame={}, -- we'll make this appear where we need it to
             visible=false,
             on_char=digits_only,
-            on_submit=self:callback('update_threshold')},
+            on_submit=self:callback('update_threshold'),
+            on_cancel=self:callback('cancel_edit_threshold')},
     }
     
     self.refresh()
@@ -279,24 +281,30 @@ function AutofarmDetails:refresh()
     local headers = get_headers()
     update_max_widths(max_field_widths, headers)
     
-    local line_fields = {}
+    local lines = {}
     for _,v in ipairs(plant_data) do
         if not show_unavailable and v.num_seeds == 0 then goto continue end
         if not show_unplantable and v.percent_map_plantable == 0 then goto continue end
         local fields = get_fields(v, settings.thresholds[v.id], cur_allocs[v.id], next_allocs[v.id])
         update_max_widths(max_field_widths, fields)
-        table.insert(line_fields, fields)
+        fields.plant_id = v.id
+        table.insert(lines, fields)
         ::continue::
     end
     
-    local fmt = get_format_str(max_field_widths)
-    self.subviews.header.setText(fmt:format(table.unpack(headers)))
+    self.subviews.header.setText(get_text_line(max_field_widths, headers))
 
-    local lines = {}
-    for _,v in ipairs(lines) do
-        table.insert(lines, fmt:format(table.unpack(v)))
+    local list = self.subviews.list
+    local selected_plant_id = (list:getSelected() or {}).plant_id
+    local list_idx = nil
+    local choices = {}
+    for i,v in ipairs(lines) do
+        table.insert(choices, get_text_line(max_field_widths, v))
+        if v.plant_id == selected_plant_id then
+            list_idx = i
+        end
     end
-    self.subviews.list.setChoices(lines)
+    self.subviews.list.setChoices(choices, list_idx)
 end
 
 function AutofarmDetails:update_setting(setting, value)
@@ -304,17 +312,15 @@ function AutofarmDetails:update_setting(setting, value)
     self:refresh()
 end
 
-function AutofarmDetails:edit_default_threshold()
-    self.subviews.default_threshold.active = true
-end
-
 function AutofarmDetails:update_default_threshold(val)
     self.settings.default_threshold = tonumber(val)
+    self:refresh()
 end
 
 function AutofarmDetails:edit_threshold(idx, obj)
+    self.editing_threshold_id = obj.plant_id
     -- find the location of the threshold text on the screen
-    -- position an edit widget over the threshold text and initialize with the threshold
+    -- position the edit widget over the threshold text and initialize with the current threshold
     -- make edit widget visible
     self.subviews.edit.visible = true
 end
@@ -325,8 +331,7 @@ end
     
 function AutofarmDetailss:update_threshold(val)
     val = tonumber(val)
-    -- TODO: set self.settings.thresholds[id] = val
-    -- hide the edit widget
+    self.settings.thresholds[self.editing_threshold_id] = val
     self:cancel_edit_threshold()
     self:refresh()
 end
@@ -354,13 +359,13 @@ function AutofarmDetails:onInput(keys)
     end
 
     if keys.LEAVESCREEN then
-        if self.subviews.edit.visible then
-            self:cancel_edit_threshold()
-        else
-            self:dismiss()
-        end
+        self:dismiss()
     end
 end
+
+--------------------------------
+-- Main UI
+--------------------------------
 
 AutofarmUI = defclass(AutofarmUI, guidm.MenuOverlay)
 AutofarmUI.ATTRS {
