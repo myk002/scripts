@@ -178,7 +178,7 @@ function AutofarmDetails:init(args)
             key='CUSTOM_R',
             on_activate=self:callback('clear_threshold')},
         widgets.HotkeyLabel{
-            frame={b=0, l=1=20},
+            frame={b=0, l=20},
             label='Copy threshold',
             key='CUSTOM_C',
             on_activate=self:callback('copy_threshold')},
