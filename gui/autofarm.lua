@@ -3,9 +3,11 @@
 --[====[
 gui/autofarm
 ============
-Graphical interface for the `autofarm` plugin. It allows you to visualize your
-farm plot crop allocation and change target thresholds for your crops. It also
-lets you select farm plots to exclude from autofarm management.
+Graphical interface for the `autofarm` plugin. It allows you to view your farm
+plot crop allocation and change target crop thresholds. It also shows you useful
+related information, such as the number of seeds and plants of each type you
+have on hand and whether the crops that you are trying to plant can be planted
+in your map biomes.
 ]====]
 
 local gui = require('gui')
@@ -16,16 +18,14 @@ local widgets = require('gui.widgets')
 show_unavailable = show_unavailable or false
 show_unplantable = show_unplantable or false
 
-local function is_tile_aboveground(pos)
-    local flags = dfhack.maps.getTileFlags(pos)
-    return not flags.subterranean
-end
+--------------------------------
+-- Plugin API mocks
+--------------------------------
 
--- set up some mocks until autofarm provides a real Lua API
-
-local af = {}
 -- load the real plugin API if we can and let it override our mocks
+local af = {}
 dfhack.pcall(function() af = require('plugins.autofarm') end)
+
 local mock_settings = {
         manage_aboveground_crops=true, -- boolean
         manage_underground_crops=true, -- boolean
@@ -33,15 +33,25 @@ local mock_settings = {
         default_threshold=50,
         thresholds={HELMET_PLUMP=150}, -- map of plant ids to custom thresholds
     }
+
+-- returns currently active settings
 af.get_settings = af.get_settings or function() return mock_settings end
+
+-- sets active settings
 af.set_settings = af.set_settings or function(settings)
         mock_settings = copyall(settings)
         mock_settings.exclude_farm_plots = copyall(settings.exclude_farm_plots)
         mock_settings.thresholds = copyall(settings.thresholds)
     end
+
+-- returns whether autofarm considers the plot to be aboveground
 af.is_plot_aboveground = af.is_plot_aboveground or function(bld)
-        return is_tile_aboveground(xyz2pos(bld.x1, bld.y1, bld.z))
+        return not dfhack.maps.getTileFlags(xyz2pos(bld.x1, bld.y1, bld.z)).subterranean
     end
+
+-- returns a list with current metrics for all plant types in the order that the UI
+-- should display them. the percent_map_plantable field is the percentage of the map
+-- that has a biome that allows the crop to be grown.
 af.get_plant_data = af.get_plant_data or function()
         return {
             {name='Plump Helmets', id='HELMET_PLUMP', num_plants=350,
@@ -52,6 +62,8 @@ af.get_plant_data = af.get_plant_data or function()
              num_seeds=5000, percent_map_plantable=0},
         }
     end
+
+-- returns the allocations per crop type that would happen with the given settings
 af.dry_run = af.dry_run or function(settings)
         return {
             HELMET_PLUMP={plots=4, tiles=20},
@@ -59,90 +71,12 @@ af.dry_run = af.dry_run or function(settings)
         }
     end
 
--- end mocks
-
-local function is_tile_managed(settings, bld, aboveground, pos)
-    if aboveground and not settings.manage_aboveground_crops then return false end
-    if not aboveground and not settings.manage_underground_crops then return false end
-    if aboveground ~= is_tile_aboveground(pos) then return false end
-    return not settings.exclude_farm_plots[bld.id]
-end
-
-local function is_in_extent(bld, x, y)
-    local extents = bld.room.extents
-    if not extents then return true end -- farm plot is solid
-    local yoff = (y - bld.y1) * (bld.x2 - bld.x1 + 1)
-    local xoff = x - bld.x1
-    return extents[yoff+xoff] == 1
-end
-
--- scan through buildings and build farm plot metadata for the display
-local function get_plot_data(settings)
-    local season = df.global.cur_season
-    local plots = df.global.world.buildings.other[
-            df.buildings_other_id.FARM_PLOT]
-
-    local num_managed_plots, total_plots = 0, 0
-    local num_managed_tiles, total_tiles = 0, 0
-    local plot_map = {} -- coordinate map for managed/unmanaged plot tiles
-    local plant_allocs = {} -- allocation metadata for each plant type
-
-    for _,bld in ipairs(plots) do
-        if bld:getBuildStage() ~= bld:getMaxBuildStage() then
-            -- ignore unbuilt farms
-            goto plot_continue
-        end
-        local plot_managed = false
-        local aboveground = af.is_plot_aboveground(bld)
-        local plot_tiles, managed_plot_tiles = 0, 0
-        for x=bld.x1,bld.x2 do for y=bld.y1,bld.y2 do
-            if not is_in_extent(bld, x, y) then goto tile_continue end
-            local zlevel = ensure_key(plot_map, bld.z)
-            local bounds = ensure_key(zlevel,'bounds',{x1=x, x2=x, y1=y, y2=y})
-            local row = ensure_key(zlevel, y)
-            local managed = is_tile_managed(settings, bld, aboveground,
-                                            xyz2pos(x, y, bld.z))
-            row[x] = {managed=managed, id=bld.id}
-            if managed then
-                plot_managed = true
-                managed_plot_tiles = managed_plot_tiles + 1
-            end
-            plot_tiles = plot_tiles + 1
-            bounds.x1 = math.min(bounds.x1, x)
-            bounds.x2 = math.max(bounds.x2, x)
-            bounds.y1 = math.min(bounds.y1, y)
-            bounds.y2 = math.max(bounds.y2, y)
-            ::tile_continue::
-        end end
-        local plant_alloc = ensure_key(plant_allocs, bld.plant_id[season])
-        ensure_key(plant_alloc, 'plots', 0)
-        ensure_key(plant_alloc, 'tiles', 0)
-        plant_alloc.plots = plant_alloc.plots + 1
-        plant_alloc.tiles = plant_alloc.tiles + managed_plot_tiles
-        if plot_managed then
-            num_managed_tiles = num_managed_tiles + managed_plot_tiles
-            num_managed_plots = num_managed_plots + 1
-        end
-        total_tiles = total_tiles + plot_tiles
-        total_plots = total_plots + 1
-        ::plot_continue::
-    end
-    return {
-        num_managed_plots=num_managed_plots,
-        total_plots=total_plots,
-        num_managed_tiles=num_managed_tiles,
-        total_tiles=total_tiles,
-        plot_map=plot_map,
-        plant_allocs=plant_allocs,
-    }
-end
-
 --------------------------------
 -- Details screen
 --------------------------------
 
 AutofarmDetails = defclass(AutofarmDetails, gui.FramedScreen)
-AutofarmDetails.ATTRS {
+AutofarmDetails.ATTRS{
     focus_path='autofarm/details',
     frame_style=gui.GREY_LINE_FRAME,
     frame_inset={l=1, r=1, b=1},
@@ -151,31 +85,31 @@ AutofarmDetails.ATTRS {
 
 local function get_headers()
     return {
-        'Plant name',
-        'Plant ID',
-        'Target threshold',
-        'Stockpiled plants',
-        'Stockpiled seeds',
-        '% of map where plantable',
-        'Current plots',
-        'Current tiles',
-        'New target plots',
-        'New target tiles',
+        'Plant name',       -- e.g. 'Plump Helmet'
+        'Plant ID',         -- e.g. 'HELMET_PLUMP'
+        'Target threshold', -- custom threshold or nil
+        'Stockpiled plants', -- plants on hand
+        'Stockpiled seeds',  -- seeds on hand
+        '% of map where plantable', -- percent of map with biomes that can grow this crop
+        'Current plots',  -- farm plots currently allocated to this plant
+        'Current tiles',  -- plot tiles currently allocated to this plant
+        'New target plots',  -- farm plots allocated to this plant on next update
+        'New target tiles',  -- plot tiles allocated to this plant on next update
     }
 end
 
 local function get_fields(plant_data_elem, threshold, cur_alloc, next_alloc)
     return {
-        plant_data_elem.name,   -- plant name
-        plant_data_elem.id,     -- plant id token (e.g. 'HELMET_PLUMP')
-        tostring(threshold) or 'Default', -- target threshold
-        tostring(plant_data_elem.num_plants), -- plants on hand
-        tostring(plant_data_elem.num_seeds),  -- seeds on hand
-        tostring(plant_data_elem.percent_map_plantable) .. '%', -- percent of map where this plant is plantable
-        tostring(cur_alloc.plots),  -- farm plots currently allocated to this plant
-        tostring(cur_alloc.tiles),  -- plot tiles currently allocated to this plant
-        tostring(next_alloc.plots), -- farm plots allocated to this plant on next update
-        tostring(next_alloc.tiles), -- plot tiles allocated to this plant on next update
+        plant_data_elem.name,
+        plant_data_elem.id,
+        tostring(threshold) or 'Default',
+        tostring(plant_data_elem.num_plants),
+        tostring(plant_data_elem.num_seeds),
+        tostring(plant_data_elem.percent_map_plantable) .. '%',
+        tostring(cur_alloc.plots),
+        tostring(cur_alloc.tiles),
+        tostring(next_alloc.plots),
+        tostring(next_alloc.tiles),
     }
 end
 
@@ -292,6 +226,9 @@ function AutofarmDetails:refresh()
         ::continue::
     end
     
+    -- align the threshold edit box with the on-screen thresholds
+    self.subviews.threshold.frame.l = max_field_widths[1] + 2 + max_field_widths[2] + 2
+    
     self.subviews.header.setText(get_text_line(max_field_widths, headers))
 
     local list = self.subviews.list
@@ -304,7 +241,7 @@ function AutofarmDetails:refresh()
             list_idx = i
         end
     end
-    self.subviews.list.setChoices(choices, list_idx)
+    self.subviews.list:setChoices(choices, list_idx)
 end
 
 function AutofarmDetails:update_setting(setting, value)
@@ -319,14 +256,24 @@ end
 
 function AutofarmDetails:edit_threshold(idx, obj)
     self.editing_threshold_id = obj.plant_id
+    
     -- find the location of the threshold text on the screen
-    -- position the edit widget over the threshold text and initialize with the current threshold
-    -- make edit widget visible
-    self.subviews.edit.visible = true
+    local list = self.subviews.list
+    local _, idx = list.getSelected()
+    local y_offset = (idx - list.page_top) * list.row_height
+
+    -- position the edit widget over the threshold text, initialize with the
+    -- current threshold, and show
+    local edit = self.subviews.threshold
+    edit.frame.t = list.frame.t + y_offset
+    edit.text = self.settings.thresholds[obj.plant_id] or ''
+    edit.visible = true
+    self:updateLayout()
 end
 
 function AutofarmDetails:cancel_edit_threshold()
     self.subviews.edit.visible = false
+    self.editing_threshold_id = nil
 end
     
 function AutofarmDetailss:update_threshold(val)
@@ -367,8 +314,89 @@ end
 -- Main UI
 --------------------------------
 
+local function is_tile_aboveground(pos)
+    local flags = dfhack.maps.getTileFlags(pos)
+    return not flags.subterranean
+end
+
+local function is_tile_managed(settings, bld, aboveground, pos)
+    if aboveground and not settings.manage_aboveground_crops then return false end
+    if not aboveground and not settings.manage_underground_crops then return false end
+    if aboveground ~= is_tile_aboveground(pos) then return false end
+    return not settings.exclude_farm_plots[bld.id]
+end
+
+local function is_in_extent(bld, x, y)
+    local extents = bld.room.extents
+    if not extents then return true end -- farm plot is solid
+    local yoff = (y - bld.y1) * (bld.x2 - bld.x1 + 1)
+    local xoff = x - bld.x1
+    return extents[yoff+xoff] == 1
+end
+
+-- scan through buildings and build farm plot metadata for the display
+local function get_plot_data(settings)
+    local season = df.global.cur_season
+    local plots = df.global.world.buildings.other[
+            df.buildings_other_id.FARM_PLOT]
+
+    local num_managed_plots, total_plots = 0, 0
+    local num_managed_tiles, total_tiles = 0, 0
+    local plot_map = {} -- coordinate map for managed/unmanaged plot tiles
+    local plant_allocs = {} -- allocation metadata for each plant type
+
+    for _,bld in ipairs(plots) do
+        if bld:getBuildStage() ~= bld:getMaxBuildStage() then
+            -- ignore unbuilt farms
+            goto plot_continue
+        end
+        local plot_managed = false
+        local aboveground = af.is_plot_aboveground(bld)
+        local plot_tiles, managed_plot_tiles = 0, 0
+        for x=bld.x1,bld.x2 do for y=bld.y1,bld.y2 do
+            if not is_in_extent(bld, x, y) then goto tile_continue end
+            local zlevel = ensure_key(plot_map, bld.z)
+            local bounds = ensure_key(zlevel,'bounds',{x1=x, x2=x, y1=y, y2=y})
+            local row = ensure_key(zlevel, y)
+            local managed = is_tile_managed(settings, bld, aboveground,
+                                            xyz2pos(x, y, bld.z))
+            row[x] = {managed=managed, id=bld.id}
+            if managed then
+                plot_managed = true
+                managed_plot_tiles = managed_plot_tiles + 1
+            end
+            plot_tiles = plot_tiles + 1
+            bounds.x1 = math.min(bounds.x1, x)
+            bounds.x2 = math.max(bounds.x2, x)
+            bounds.y1 = math.min(bounds.y1, y)
+            bounds.y2 = math.max(bounds.y2, y)
+            ::tile_continue::
+        end end
+        local plant_alloc = ensure_key(plant_allocs, bld.plant_id[season])
+        ensure_key(plant_alloc, 'plots', 0)
+        ensure_key(plant_alloc, 'tiles', 0)
+        plant_alloc.plots = plant_alloc.plots + 1
+        plant_alloc.tiles = plant_alloc.tiles + managed_plot_tiles
+        if plot_managed then
+            num_managed_tiles = num_managed_tiles + managed_plot_tiles
+            num_managed_plots = num_managed_plots + 1
+        end
+        total_tiles = total_tiles + plot_tiles
+        total_plots = total_plots + 1
+        ::plot_continue::
+    end
+    return {
+        num_managed_plots=num_managed_plots,
+        total_plots=total_plots,
+        num_managed_tiles=num_managed_tiles,
+        total_tiles=total_tiles,
+        plot_map=plot_map,
+        plant_allocs=plant_allocs,
+    }
+end
+
 AutofarmUI = defclass(AutofarmUI, guidm.MenuOverlay)
-AutofarmUI.ATTRS {
+AutofarmUI.ATTRS{
     frame_inset=1,
     focus_path='autofarm',
     sidebar_mode=df.ui_sidebar_mode.Default,
