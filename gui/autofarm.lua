@@ -12,20 +12,13 @@ local gui = require('gui')
 local guidm = require('gui.dwarfmode')
 local widgets = require('gui.widgets')
 
--- persist these between invocations
+-- persist details panel display options between script invocations
 show_unavailable = show_unavailable or false
 show_unplantable = show_unplantable or false
 
 local function is_tile_aboveground(pos)
     local flags = dfhack.maps.getTileFlags(pos)
     return not flags.subterranean
-end
-
-local function is_tile_managed(settings, bld, aboveground, pos)
-    if aboveground and not settings.manage_aboveground_crops then return false end
-    if not aboveground and not settings.manage_underground_crops then return false end
-    if aboveground ~= is_tile_aboveground(pos) then return false end
-    return not settings.exclude_farm_plots[bld.id]
 end
 
 -- set up some mocks until autofarm provides a real Lua API
@@ -44,29 +37,36 @@ af.get_settings = af.get_settings or function() return mock_settings end
 af.set_settings = af.set_settings or function(settings)
         mock_settings = copyall(settings)
         mock_settings.exclude_farm_plots = copyall(settings.exclude_farm_plots)
+        mock_settings.thresholds = copyall(settings.thresholds)
     end
 af.is_plot_aboveground = af.is_plot_aboveground or function(bld)
         return is_tile_aboveground(xyz2pos(bld.x1, bld.y1, bld.z))
-    end
-af.get_num_plantable_seeds = af.get_num_plantable_seeds or function()
-        return 123
-    end
-af.get_num_growable_plants = af.get_num_growable_plants or function()
-        return 321
     end
 af.get_plant_data = af.get_plant_data or function()
         return {
             {name='Plump Helmets', id='HELMET_PLUMP', num_plants=350,
              num_seeds=40, percent_map_plantable=75},
+            {name='Pig Tails', id='TAIL_PIG', num_plants=20,
+             num_seeds=5, percent_map_plantable=100},
+            {name='Rope Weed', id='WEED_ROPE', num_plants=2000,
+             num_seeds=5000, percent_map_plantable=0},
         }
     end
 af.dry_run = af.dry_run or function(settings)
         return {
             HELMET_PLUMP={plots=4, tiles=20},
+            TAIL_PIG={plots=1, tiles=2},
         }
     end
 
 -- end mocks
+
+local function is_tile_managed(settings, bld, aboveground, pos)
+    if aboveground and not settings.manage_aboveground_crops then return false end
+    if not aboveground and not settings.manage_underground_crops then return false end
+    if aboveground ~= is_tile_aboveground(pos) then return false end
+    return not settings.exclude_farm_plots[bld.id]
+end
 
 local function is_in_extent(bld, x, y)
     local extents = bld.room.extents
@@ -89,11 +89,12 @@ local function get_plot_data(settings)
 
     for _,bld in ipairs(plots) do
         if bld:getBuildStage() ~= bld:getMaxBuildStage() then
+            -- ignore unbuilt farms
             goto plot_continue
         end
         local plot_managed = false
         local aboveground = af.is_plot_aboveground(bld)
-        local plot_tiles = 0
+        local plot_tiles, managed_plot_tiles = 0, 0
         for x=bld.x1,bld.x2 do for y=bld.y1,bld.y2 do
             if not is_in_extent(bld, x, y) then goto tile_continue end
             local zlevel = ensure_key(plot_map, bld.z)
@@ -104,6 +105,7 @@ local function get_plot_data(settings)
             row[x] = {managed=managed, id=bld.id}
             if managed then
                 plot_managed = true
+                managed_plot_tiles = managed_plot_tiles + 1
             end
             plot_tiles = plot_tiles + 1
             bounds.x1 = math.min(bounds.x1, x)
@@ -112,16 +114,13 @@ local function get_plot_data(settings)
             bounds.y2 = math.max(bounds.y2, y)
             ::tile_continue::
         end end
-        local plant_id = bld.plant_id[season]
-        if plant_id ~= -1 then
-            local plant_alloc = ensure_key(plant_allocs, plant_id)
-            ensure_key(plant_alloc, 'plots', 0)
-            ensure_key(plant_alloc, 'tiles', 0)
-            plant_alloc.plots = plant_alloc.plots + 1
-            plant_alloc.tiles = plant_alloc.tiles + plot_tiles
-        end
+        local plant_alloc = ensure_key(plant_allocs, bld.plant_id[season])
+        ensure_key(plant_alloc, 'plots', 0)
+        ensure_key(plant_alloc, 'tiles', 0)
+        plant_alloc.plots = plant_alloc.plots + 1
+        plant_alloc.tiles = plant_alloc.tiles + managed_plot_tiles
         if plot_managed then
-            num_managed_tiles = num_managed_tiles + plot_tiles
+            num_managed_tiles = num_managed_tiles + managed_plot_tiles
             num_managed_plots = num_managed_plots + 1
         end
         total_tiles = total_tiles + plot_tiles
@@ -165,7 +164,7 @@ local function get_fields(plant_data_elem, threshold, cur_alloc, next_alloc)
     return {
         plant_data_elem.name,   -- plant name
         plant_data_elem.id,     -- plant id token (e.g. 'HELMET_PLUMP')
-        threshold or 'Default', -- target threshold
+        tostring(threshold) or 'Default', -- target threshold
         tostring(plant_data_elem.num_plants), -- plants on hand
         tostring(plant_data_elem.num_seeds),  -- seeds on hand
         tostring(plant_data_elem.percent_map_plantable) .. '%', -- percent of map where this plant is plantable
@@ -192,9 +191,13 @@ local function get_text(widths, fields)
     return text
 end
 
+local function digits_only(ch)
+    return ch:match('%d')
+end
+
 function AutofarmDetails:init(args)
-    self.plant_data = af.get_plant_data()
     self.settings = af.get_settings()
+    self.plant_data = args.plant_data
     self.cur_allocs = args.cur_allocs
     
     self:addviews{
@@ -216,10 +219,17 @@ function AutofarmDetails:init(args)
             initial_option=show_unplantable,
             text_pen=COLOR_GREY,
             on_change=self:callback('update_setting', 'show_unplantable')},
-        widgets.Label{
-            frame={t=1},
-            text={'Default threshold: ',
-                  {text=function() return self.settings.default_threshold end}},
+        widgets.HotkeyLabel{
+            frame={t=1, l=1},
+            key='CUSTOM_D',
+            text='Default threshold:'}
+        widgets.EditField{
+            view_id='default_threshold',
+            frame={t=1, l=20},
+            active=false,
+            text=tostring(self.settings.default_threshold),
+            on_char=digits_only,
+            on_submit=self:callback('update_default_threshold')},
         widgets.Label{
             view_id='header',
             frame={t=2}},
@@ -248,10 +258,10 @@ function AutofarmDetails:init(args)
             text={': ', {text=function() return self.clipboard end}},
             visible=function() return self.clipboard end},
         widgets.EditField{
-            view_id='edit',
-            frame={},
+            view_id='threshold',
+            frame={}, -- we'll make this appear where we need it to
             visible=false,
-            on_char=function(ch) return ch:match('%d') end,
+            on_char=digits_only,
             on_submit=self:callback('update_threshold')},
     }
     
@@ -292,6 +302,14 @@ end
 function AutofarmDetails:update_setting(setting, value)
     _ENV[setting] = value
     self:refresh()
+end
+
+function AutofarmDetails:edit_default_threshold()
+    self.subviews.default_threshold.active = true
+end
+
+function AutofarmDetails:update_default_threshold(val)
+    self.settings.default_threshold = tonumber(val)
 end
 
 function AutofarmDetails:edit_threshold(idx, obj)
@@ -355,8 +373,15 @@ function AutofarmUI:init()
     self:refresh_data()
 
     local settings = af.get_settings()
-    local num_seeds = af.get_num_plantable_seeds()
-    local num_plants = af.get_num_growable_plants()
+    local plant_data = af.get_plant_data()
+        
+    local num_seeds, num_plants = 0, 0
+    for _,p in ipairs(plant_data)
+        if p.percent_map_plantable > 0 then
+            num_seeds = num_seeds + p.num_seeds
+            num_plants = num_plants + p.num_plants
+        end
+    end
 
     local subviews = {
         widgets.Label{text='Autofarm'},
@@ -400,7 +425,10 @@ function AutofarmUI:init()
         widgets.HotkeyLabel{
             key='CUSTOM_T',
             label='Crop threshold details',
-            on_activate=self:callback('show_details')},
+            on_activate=function()
+                    AutofarmDetails{cur_allocs=self.data.plant_allocs,
+                                    plant_data=plant_data}:show()
+                end},
         widgets.HotkeyLabel{
             key='LEAVESCREEN',
             label=self:callback('get_back_text'),
@@ -413,8 +441,7 @@ function AutofarmUI:init()
 end
 
 function AutofarmUI:refresh_data(settings)
-    settings = settings or af.get_settings()
-    self.data = get_plot_data(settings)
+    self.data = get_plot_data(settings or af.get_settings())
 end
 
 function AutofarmUI:do_update(settings)
@@ -458,10 +485,6 @@ function AutofarmUI:on_back()
     else
         self:dismiss()
     end
-end
-
-function AutofarmUI:show_details()
-    AutofarmDetails{cur_allocs=self.data.plant_allocs}:show()
 end
 
 function AutofarmUI:get_bounds(cursor)
