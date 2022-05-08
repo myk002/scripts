@@ -60,6 +60,8 @@ af.get_plant_data = af.get_plant_data or function()
              num_seeds=5, percent_map_plantable=100},
             {name='Rope Weed', id='WEED_ROPE', num_plants=2000,
              num_seeds=5000, percent_map_plantable=0},
+            {name='Evil All of Root', id='ROOT_OF_ALL_EVIL', num_plants=0,
+             num_seeds=0, percent_map_plantable=0},
         }
     end
 
@@ -87,29 +89,32 @@ local function get_headers()
     return {
         'Plant name',       -- e.g. 'Plump Helmet'
         'Plant ID',         -- e.g. 'HELMET_PLUMP'
-        'Target threshold', -- custom threshold or nil
-        'Stockpiled plants', -- plants on hand
-        'Stockpiled seeds',  -- seeds on hand
-        '% of map where plantable', -- percent of map with biomes that can grow this crop
-        'Current plots',  -- farm plots currently allocated to this plant
-        'Current tiles',  -- plot tiles currently allocated to this plant
-        'New target plots',  -- farm plots allocated to this plant on next update
-        'New target tiles',  -- plot tiles allocated to this plant on next update
+        'Threshold',         -- custom threshold or nil
+        'Plants', -- plants on hand
+        'Seeds',  -- seeds on hand
+        'Biomes', -- percent of map with biomes that can grow this crop
+        'Cur plots',  -- farm plots currently allocated to this plant
+        'Cur tiles',  -- plot tiles currently allocated to this plant
+        'Next plots',  -- farm plots allocated to this plant on next update
+        'Next tiles',  -- plot tiles allocated to this plant on next update
     }
 end
 
 local function get_fields(plant_data_elem, threshold, cur_alloc, next_alloc)
+    cur_alloc = cur_alloc or {}
+    next_alloc = next_alloc or {}
+
     return {
         plant_data_elem.name,
         plant_data_elem.id,
-        tostring(threshold) or 'Default',
+        tostring(threshold or 'Default'),
         tostring(plant_data_elem.num_plants),
         tostring(plant_data_elem.num_seeds),
         tostring(plant_data_elem.percent_map_plantable) .. '%',
-        tostring(cur_alloc.plots),
-        tostring(cur_alloc.tiles),
-        tostring(next_alloc.plots),
-        tostring(next_alloc.tiles),
+        tostring(cur_alloc.plots or 0),
+        tostring(cur_alloc.tiles or 0),
+        tostring(next_alloc.plots or 0),
+        tostring(next_alloc.tiles or 0),
     }
 end
 
@@ -144,14 +149,14 @@ function AutofarmDetails:init(args)
             text='Filters:',
             text_pen=COLOR_GREY},
         widgets.ToggleHotkeyLabel{
-            frame={t=0, l=12},
+            frame={t=0, l=11},
             label='Show unavailable',
             key='CUSTOM_ALT_A',
             initial_option=show_unavailable,
             text_pen=COLOR_GREY,
             on_change=self:callback('update_setting', 'show_unavailable')},
         widgets.ToggleHotkeyLabel{
-            frame={t=0, l=44},
+            frame={t=0, l=41},
             label='Show unplantable',
             key='CUSTOM_ALT_P',
             initial_option=show_unplantable,
@@ -167,31 +172,32 @@ function AutofarmDetails:init(args)
             on_submit=self:callback('update_default_threshold')},
         widgets.Label{
             view_id='header',
-            frame={t=2}},
+            frame={t=3}},
         widgets.List{
             view_id='list',
-            frame={t=4},
-            on_select=self:callback('edit_threshold')},
+            frame={t=5},
+            on_submit=self:callback('edit_threshold')},
         widgets.HotkeyLabel{
             frame={b=0, l=1},
             label='Clear threshold',
             key='CUSTOM_R',
             on_activate=self:callback('clear_threshold')},
         widgets.HotkeyLabel{
-            frame={b=0, l=20},
+            frame={b=0, l=21},
             label='Copy threshold',
             key='CUSTOM_C',
             on_activate=self:callback('copy_threshold')},
         widgets.HotkeyLabel{
-            frame={b=0, l=35},
+            frame={b=0, l=40},
             label='Paste threshold',
             key='CUSTOM_P',
             enabled=function() return self.clipboard end,
             on_activate=self:callback('paste_threshold')},
         widgets.Label{
-            frame={b=0, l=47},
+            view_id='clipboard',
+            frame={b=0, l=59},
             text={': ', {text=function() return self.clipboard end}},
-            visible=function() return self.clipboard end},
+            visible=false},
         widgets.EditField{
             view_id='threshold',
             frame={}, -- we'll make this appear where we need it to
@@ -201,10 +207,10 @@ function AutofarmDetails:init(args)
             on_cancel=self:callback('cancel_edit_threshold')},
     }
     
-    self.refresh()
+    self:refresh()
 end
     
-function AutofarmDetails.onDismiss()
+function AutofarmDetails:onDismiss()
     af.set_settings(self.settings)
 end
 
@@ -216,10 +222,13 @@ function AutofarmDetails:refresh()
     update_max_widths(max_field_widths, headers)
     
     local lines = {}
-    for _,v in ipairs(plant_data) do
-        if not show_unavailable and v.num_seeds == 0 then goto continue end
-        if not show_unplantable and v.percent_map_plantable == 0 then goto continue end
-        local fields = get_fields(v, settings.thresholds[v.id], cur_allocs[v.id], next_allocs[v.id])
+    for _,v in ipairs(self.plant_data) do
+        if (not show_unavailable and v.num_seeds == 0) or
+                (not show_unplantable and v.percent_map_plantable == 0) then
+            goto continue
+        end
+        local fields = get_fields(v, self.settings.thresholds[v.id],
+                                  self.cur_allocs[v.id], next_allocs[v.id])
         update_max_widths(max_field_widths, fields)
         fields.plant_id = v.id
         table.insert(lines, fields)
@@ -229,10 +238,11 @@ function AutofarmDetails:refresh()
     -- align the threshold edit box with the on-screen thresholds
     self.subviews.threshold.frame.l = max_field_widths[1] + 2 + max_field_widths[2] + 2
     
-    self.subviews.header.setText(get_text_line(max_field_widths, headers))
+    self.subviews.header:setText(get_text_line(max_field_widths, headers))
 
     local list = self.subviews.list
-    local selected_plant_id = (list:getSelected() or {}).plant_id
+    local _, obj = list:getSelected()
+    local selected_plant_id = (obj or {}).plant_id
     local list_idx = nil
     local choices = {}
     for i,v in ipairs(lines) do
@@ -259,7 +269,8 @@ function AutofarmDetails:edit_threshold(idx, obj)
     
     -- find the location of the threshold text on the screen
     local list = self.subviews.list
-    local _, idx = list.getSelected()
+    local idx, obj = list:getSelected()
+    if not obj then return end
     local y_offset = (idx - list.page_top) * list.row_height
 
     -- position the edit widget over the threshold text, initialize with the
@@ -272,11 +283,11 @@ function AutofarmDetails:edit_threshold(idx, obj)
 end
 
 function AutofarmDetails:cancel_edit_threshold()
-    self.subviews.edit.visible = false
+    self.subviews.threshold.visible = false
     self.editing_threshold_id = nil
 end
     
-function AutofarmDetailss:update_threshold(val)
+function AutofarmDetails:update_threshold(val)
     val = tonumber(val)
     self.settings.thresholds[self.editing_threshold_id] = val
     self:cancel_edit_threshold()
@@ -284,18 +295,19 @@ function AutofarmDetailss:update_threshold(val)
 end
 
 function AutofarmDetails:clear_threshold()
-    local obj = self.subviews.list.getSelected()
+    local _, obj = self.subviews.list:getSelected()
     self.settings.thresholds[obj.plant_id] = nil
     self:refresh()
 end
     
 function AutofarmDetails:copy_threshold()
-    local obj = self.subviews.list.getSelected()
+    local _, obj = self.subviews.list:getSelected()
     self.clipboard = self.settings.thresholds[obj.plant_id]
+    self.subviews.clipboard.visible = self.clipboard
 end
 
 function AutofarmDetails:paste_threshold()
-    local obj = self.subviews.list.getSelected()
+    local _, obj = self.subviews.list:getSelected()
     self.settings.thresholds[obj.plant_id] = self.clipboard
     self:refresh()
 end
