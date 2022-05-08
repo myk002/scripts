@@ -409,7 +409,7 @@ function AutofarmUI:init()
     local plant_data = af.get_plant_data()
         
     local num_seeds, num_plants = 0, 0
-    for _,p in ipairs(plant_data)
+    for _,p in ipairs(plant_data) do
         if p.percent_map_plantable > 0 then
             num_seeds = num_seeds + p.num_seeds
             num_plants = num_plants + p.num_plants
