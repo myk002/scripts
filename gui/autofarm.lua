@@ -87,16 +87,14 @@ AutofarmDetails.ATTRS{
 
 local function get_headers()
     return {
-        'Plant name',       -- e.g. 'Plump Helmet'
-        'Plant ID',         -- e.g. 'HELMET_PLUMP'
-        'Threshold',         -- custom threshold or nil
-        'Plants', -- plants on hand
-        'Seeds',  -- seeds on hand
-        'Biomes', -- percent of map with biomes that can grow this crop
-        'Cur plots',  -- farm plots currently allocated to this plant
-        'Cur tiles',  -- plot tiles currently allocated to this plant
-        'Next plots',  -- farm plots allocated to this plant on next update
-        'Next tiles',  -- plot tiles allocated to this plant on next update
+        'Plant name', -- e.g. 'Plump Helmet'
+        'Plant ID',   -- e.g. 'HELMET_PLUMP'
+        'Threshold',  -- custom threshold or nil
+        'Plants',     -- plants on hand
+        'Seeds',      -- seeds on hand
+        'Biome',     -- percent of map with biomes that can grow this crop
+        'Plots',      -- farm plots allocated to this plant now / after update
+        'Tiles',      -- plot tiles allocated to this plant now / after update
     }
 end
 
@@ -111,10 +109,8 @@ local function get_fields(plant_data_elem, threshold, cur_alloc, next_alloc)
         tostring(plant_data_elem.num_plants),
         tostring(plant_data_elem.num_seeds),
         tostring(plant_data_elem.percent_map_plantable) .. '%',
-        tostring(cur_alloc.plots or 0),
-        tostring(cur_alloc.tiles or 0),
-        tostring(next_alloc.plots or 0),
-        tostring(next_alloc.tiles or 0),
+        ('%d -> %d'):format((cur_alloc.plots or 0), (next_alloc.plots or 0)),
+        ('%d -> %d'):format((cur_alloc.tiles or 0), (next_alloc.tiles or 0)),
     }
 end
 
@@ -125,13 +121,13 @@ local function update_max_widths(max_field_widths, fields)
 end
 
 local function get_text_line(widths, fields)
-    local text = {plant_id=fields.plant_id}
+    local text = {}
     for i,w in ipairs(widths) do
         table.insert(text, {text=fields[i], width=w})
         table.insert(text, '  ')
     end
     text[#text] = nil -- remove the last spacer
-    return text
+    return {text=text, plant_id=fields.plant_id}
 end
 
 local function digits_only(ch)
@@ -164,6 +160,7 @@ function AutofarmDetails:init(args)
             on_change=self:callback('update_setting', 'show_unplantable')},
         widgets.EditField{
             view_id='default_threshold',
+            visible=false, -- remove once EditField widgets are fixed
             frame={t=1, l=1},
             key='CUSTOM_D',
             label='Default threshold',
@@ -177,25 +174,33 @@ function AutofarmDetails:init(args)
             view_id='list',
             frame={t=5},
             on_submit=self:callback('edit_threshold')},
-        widgets.HotkeyLabel{
+        widgets.Label{
             frame={b=0, l=1},
-            label='Clear threshold',
+            text='Selected threshold:',
+            text_pen=COLOR_GREY},
+        widgets.HotkeyLabel{
+            frame={b=0, l=22},
+            label='Edit',
+            key='SELECT'},
+        widgets.HotkeyLabel{
+            frame={b=0, l=35},
+            label='Clear',
             key='CUSTOM_R',
             on_activate=self:callback('clear_threshold')},
         widgets.HotkeyLabel{
-            frame={b=0, l=21},
-            label='Copy threshold',
+            frame={b=0, l=45},
+            label='Copy',
             key='CUSTOM_C',
             on_activate=self:callback('copy_threshold')},
         widgets.HotkeyLabel{
-            frame={b=0, l=40},
-            label='Paste threshold',
+            frame={b=0, l=54},
+            label='Paste',
             key='CUSTOM_P',
             enabled=function() return self.clipboard end,
             on_activate=self:callback('paste_threshold')},
         widgets.Label{
             view_id='clipboard',
-            frame={b=0, l=59},
+            frame={b=0, l=62},
             text={': ', {text=function() return self.clipboard end}},
             visible=false},
         widgets.EditField{
@@ -214,13 +219,9 @@ function AutofarmDetails:onDismiss()
     af.set_settings(self.settings)
 end
 
-function AutofarmDetails:refresh()
+function AutofarmDetails:set_list_choices(max_field_widths)
     local next_allocs = af.dry_run(self.settings)
-    
-    local max_field_widths = {}
-    local headers = get_headers()
-    update_max_widths(max_field_widths, headers)
-    
+
     local lines = {}
     for _,v in ipairs(self.plant_data) do
         if (not show_unavailable and v.num_seeds == 0) or
@@ -234,11 +235,6 @@ function AutofarmDetails:refresh()
         table.insert(lines, fields)
         ::continue::
     end
-    
-    -- align the threshold edit box with the on-screen thresholds
-    self.subviews.threshold.frame.l = max_field_widths[1] + 2 + max_field_widths[2] + 2
-    
-    self.subviews.header:setText(get_text_line(max_field_widths, headers))
 
     local list = self.subviews.list
     local _, obj = list:getSelected()
@@ -252,6 +248,22 @@ function AutofarmDetails:refresh()
         end
     end
     self.subviews.list:setChoices(choices, list_idx)
+end
+
+function AutofarmDetails:refresh()
+    local headers = get_headers()
+    local max_field_widths = {}
+    update_max_widths(max_field_widths, headers)
+
+    -- updates max_field_widths
+    self:set_list_choices(max_field_widths)
+    
+    self.subviews.header:setText(get_text_line(max_field_widths, headers).text)
+
+    -- align the threshold edit box with the on-screen thresholds
+    local threshold = self.subviews.threshold
+    threshold.frame.l = max_field_widths[1] + 2 + max_field_widths[2] + 2
+    threshold.frame.w = max_field_widths[3]
 end
 
 function AutofarmDetails:update_setting(setting, value)
