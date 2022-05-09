@@ -46,12 +46,13 @@ af.set_settings = af.set_settings or function(settings)
 
 -- returns whether autofarm considers the plot to be aboveground
 af.is_plot_aboveground = af.is_plot_aboveground or function(bld)
-        return not dfhack.maps.getTileFlags(xyz2pos(bld.x1, bld.y1, bld.z)).subterranean
+        return not dfhack.maps.getTileFlags(
+                xyz2pos(bld.x1, bld.y1, bld.z)).subterranean
     end
 
--- returns a list with current metrics for all plant types in the order that the UI
--- should display them. the percent_map_plantable field is the percentage of the map
--- that has a biome that allows the crop to be grown.
+-- returns a list with current metrics for all plant types in the order that the
+-- UI should display them. the percent_map_plantable field is the percentage of
+-- the map that has a biome that allows the crop to be grown.
 af.get_plant_data = af.get_plant_data or function()
         return {
             {name='Plump Helmets', id='HELMET_PLUMP', num_plants=350,
@@ -82,7 +83,7 @@ AutofarmDetails.ATTRS{
     focus_path='autofarm/details',
     frame_style=gui.GREY_LINE_FRAME,
     frame_inset={l=1, r=1, b=1},
-    frame_title='Autofarm Crop Threshold Details'
+    frame_title='Autofarm Crop Threshold Details',
 }
 
 local function get_headers()
@@ -212,9 +213,15 @@ function AutofarmDetails:init(args)
             on_cancel=self:callback('cancel_edit_threshold')},
     }
     
-    self:refresh()
+    self:refresh(true)
 end
-    
+
+function AutofarmDetails:getWantedFrameSize()
+    local list = self.subviews.list
+    return math.max(70, list:getContentWidth()),
+            math.max(20, list:getContentHeight())
+end
+
 function AutofarmDetails:onDismiss()
     af.set_settings(self.settings)
 end
@@ -250,7 +257,7 @@ function AutofarmDetails:set_list_choices(max_field_widths)
     self.subviews.list:setChoices(choices, list_idx)
 end
 
-function AutofarmDetails:refresh()
+function AutofarmDetails:refresh(is_init)
     local headers = get_headers()
     local max_field_widths = {}
     update_max_widths(max_field_widths, headers)
@@ -264,6 +271,8 @@ function AutofarmDetails:refresh()
     local threshold = self.subviews.threshold
     threshold.frame.l = max_field_widths[1] + 2 + max_field_widths[2] + 2
     threshold.frame.w = max_field_widths[3]
+
+    if not is_init then self:updateLayout() end
 end
 
 function AutofarmDetails:update_setting(setting, value)
