@@ -161,7 +161,6 @@ function AutofarmDetails:init(args)
             on_change=self:callback('update_setting', 'show_unplantable')},
         widgets.EditField{
             view_id='default_threshold',
-            visible=false, -- remove once EditField widgets are fixed
             frame={t=1, l=1},
             key='CUSTOM_D',
             label='Default threshold',
@@ -281,7 +280,12 @@ function AutofarmDetails:update_setting(setting, value)
 end
 
 function AutofarmDetails:update_default_threshold(val)
-    self.settings.default_threshold = tonumber(val)
+    val = tonumber(val)
+    if not val then
+        val = self.settings.default_threshold
+        self.subviews.default_threshold.text = tostring(val)
+    end
+    self.settings.default_threshold = val
     self:refresh()
 end
 
