@@ -164,6 +164,7 @@ function AutofarmDetails:init(args)
             frame={t=1, l=1},
             key='CUSTOM_D',
             label='Default threshold',
+            modal=true,
             text=tostring(self.settings.default_threshold),
             on_char=digits_only,
             on_submit=self:callback('update_default_threshold')},
@@ -207,6 +208,7 @@ function AutofarmDetails:init(args)
             view_id='threshold',
             frame={}, -- we'll make this appear where we need it to
             visible=false,
+            modal=true,
             on_char=digits_only,
             on_submit=self:callback('update_threshold'),
             on_cancel=self:callback('cancel_edit_threshold')},
@@ -302,8 +304,9 @@ function AutofarmDetails:edit_threshold(idx, obj)
     -- current threshold, and show
     local edit = self.subviews.threshold
     edit.frame.t = list.frame.t + y_offset
-    edit.text = self.settings.thresholds[obj.plant_id] or ''
+    edit.text = tostring(self.settings.thresholds[obj.plant_id] or '')
     edit.visible = true
+    edit:setFocus(true)
     self:updateLayout()
 end
 
