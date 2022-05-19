@@ -139,7 +139,7 @@ function AutofarmDetails:init(args)
     self.settings = af.get_settings()
     self.plant_data = args.plant_data
     self.cur_allocs = args.cur_allocs
-    
+
     self:addviews{
         widgets.Label{
             frame={t=0, l=1},
@@ -213,7 +213,7 @@ function AutofarmDetails:init(args)
             on_submit=self:callback('update_threshold'),
             on_cancel=self:callback('cancel_edit_threshold')},
     }
-    
+
     self:refresh(true)
 end
 
@@ -265,7 +265,7 @@ function AutofarmDetails:refresh(is_init)
 
     -- updates max_field_widths
     self:set_list_choices(max_field_widths)
-    
+
     self.subviews.header:setText(get_text_line(max_field_widths, headers).text)
 
     -- align the threshold edit box with the on-screen thresholds
@@ -293,7 +293,7 @@ end
 
 function AutofarmDetails:edit_threshold(idx, obj)
     self.editing_threshold_id = obj.plant_id
-    
+
     -- find the location of the threshold text on the screen
     local list = self.subviews.list
     local idx, obj = list:getSelected()
@@ -314,7 +314,7 @@ function AutofarmDetails:cancel_edit_threshold()
     self.subviews.threshold.visible = false
     self.editing_threshold_id = nil
 end
-    
+
 function AutofarmDetails:update_threshold(val)
     val = tonumber(val)
     self.settings.thresholds[self.editing_threshold_id] = val
@@ -327,7 +327,7 @@ function AutofarmDetails:clear_threshold()
     self.settings.thresholds[obj.plant_id] = nil
     self:refresh()
 end
-    
+
 function AutofarmDetails:copy_threshold()
     local _, obj = self.subviews.list:getSelected()
     self.clipboard = self.settings.thresholds[obj.plant_id]
@@ -447,7 +447,7 @@ function AutofarmUI:init()
 
     local settings = af.get_settings()
     local plant_data = af.get_plant_data()
-        
+
     local num_seeds, num_plants = 0, 0
     for _,p in ipairs(plant_data) do
         if p.percent_map_plantable > 0 then
