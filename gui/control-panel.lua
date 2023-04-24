@@ -55,6 +55,7 @@ local SYSTEM_SERVICES = {
     'automelt',
     'buildingplan',
     'confirm',
+    'logistics',
     'overlay',
 }
 local SYSTEM_USER_SERVICES = {
