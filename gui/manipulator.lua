@@ -20,11 +20,10 @@ Column.ATTRS{
     data_fn=DEFAULT_NIL,
     count_fn=DEFAULT_NIL,
     make_sort_order_fn=DEFAULT_NIL,
-    group=DEFAULT_NIL,
+    group='',
     label_inset=0,
     data_width=4,
     hidden=DEFAULT_NIL,
-    autoarrange_subviews=true,
 }
 
 function Column:init()
@@ -42,8 +41,14 @@ function Column:init()
     end
 
     self:addviews{
+        widgets.TextButton{
+            view_id='col_group',
+            frame={t=0, l=0, h=1, w=#self.group+2},
+            label=self.group,
+            visible=#self.group > 0,
+        },
         widgets.Panel{
-            frame={l=0, h=5},
+            frame={t=2, l=0, h=5},
             subviews={
                 widgets.Divider{
                     view_id='col_stem',
@@ -61,32 +66,33 @@ function Column:init()
         },
         widgets.Label{
             view_id='col_current',
-            frame={l=1+self.label_inset, w=4},
+            frame={t=7, l=1+self.label_inset, w=4},
         },
         widgets.Label{
             view_id='col_total',
-            frame={l=1+self.label_inset, w=4},
+            frame={t=8, l=1+self.label_inset, w=4},
         },
         widgets.List{
             view_id='col_list',
-            frame={l=0, w=self.data_width},
+            frame={t=10, l=0, w=self.data_width},
         },
     }
 
     self.subviews.col_list.scrollbar.visible = false
 end
 
-function Column:set_data(units, unit_ids, sort_order)
-    self.unit_ids, self.sort_order = unit_ids, sort_order
-
+function Column:set_data(units, visible_unit_ids)
     local choices = {}
     local current, total = 0, 0
     local next_id_idx = 1
     for _, unit in ipairs(units) do
         local val = self.count_fn(unit)
-        if unit.id == unit_ids[next_id_idx] then
+        if unit.id == visible_unit_ids[next_id_idx] then
             local data = self.data_fn(unit)
-            table.insert(choices, (not data or data == 0) and '-' or tostring(data))
+            table.insert(choices, {
+                text=(not data or data == 0) and '-' or tostring(data),
+                unit_id=unit.id,
+            })
             current = current + val
             next_id_idx = next_id_idx + 1
         end
@@ -153,6 +159,7 @@ function Spreadsheet:init()
         ToggleColumn{
             label='Favorites',
             data_fn=function(unit) return utils.binsearch(ensure_key(config.data, 'favorites'), unit.id) end,
+            group='tags',
         },
     }
 
@@ -171,13 +178,35 @@ function Spreadsheet:init()
         end
     end
 
+    for _, wd in ipairs(df.global.plotinfo.labor_info.work_details) do
+        cols:addviews{
+            ToggleColumn{
+                label=wd.name,
+                data_fn=function(unit)
+                    return utils.binsearch(wd.assigned_units, unit.id) and true or false
+                end,
+                group='work details',
+            }
+        }
+    end
+
     self:addviews{
+        widgets.TextButton{
+            view_id='left_group',
+            frame={t=0, l=0, h=1},
+            visible=false,
+        },
+        widgets.TextButton{
+            view_id='right_group',
+            frame={t=0, r=0, h=1},
+            visible=false,
+        },
         widgets.Label{
-            frame={t=5, l=0},
+            frame={t=7, l=0},
             text='Shown:',
         },
         widgets.Label{
-            frame={t=6, l=0},
+            frame={t=8, l=0},
             text='Total:',
         },
         DataColumn{
@@ -213,42 +242,103 @@ function Spreadsheet:get_visible_unit_ids(units)
     return visible_unit_ids
 end
 
-function Spreadsheet:update_col_layout(idx, col, width, max_width)
-    col.visible = not col.hidden and idx >= self.left_col and width + col.frame.w <= max_width
-    col.frame.l = width
-    return width + (col.visible and col.data_width+1 or 0)
+function Spreadsheet:sort_by_current_row()
+end
+
+function Spreadsheet:filter(search)
+end
+
+function Spreadsheet:hide_current_row()
+end
+
+function Spreadsheet:jump_to_group(group)
+    for i, col in ipairs(self.cols.subviews) do
+        if not col.hidden and col.group == group then
+            self.left_col = i
+            break
+        end
+    end
+    self:updateLayout()
 end
 
 function Spreadsheet:refresh()
     local units = dfhack.units.getCitizens()
     local visible_unit_ids = self:get_visible_unit_ids(units)
     --local sort_order = self.subviews.name.sort_order or self.subviews.name.make_sort_order_fn(visible_unit_ids)
-    local max_width = self.frame_body and self.frame_body.width or 0
-    local ord, width = 1, self.subviews.name.data_width + 1
-    self.subviews.name:set_data(units, visible_unit_ids, sort_order)
-    for idx, col in ipairs(self.cols.subviews) do
-        col:set_data(units, visible_unit_ids, sort_order)
+    local ord = 1
+    self.subviews.name:set_data(units, visible_unit_ids)
+    for _, col in ipairs(self.cols.subviews) do
+        col:set_data(units, visible_unit_ids)
         if not col.hidden then
-            col:set_stem_height((6-ord)%5)
+            col:set_stem_height((5-ord)%5)
             ord = ord + 1
         end
-        width = self:update_col_layout(idx, col, width, max_width)
+    end
+    if (self.frame_parent_rect) then
+        self:updateLayout()
     end
 end
 
+function Spreadsheet:update_col_layout(idx, col, width, group, max_width)
+    col.visible = not col.hidden and idx >= self.left_col and width + col.frame.w <= max_width
+    col.frame.l = width
+    if not col.visible then
+        return width, group
+    end
+    local col_group = col.subviews.col_group
+    col_group.label.on_activate=self:callback('jump_to_group', col.group)
+    col_group.visible = group ~= col.group
+    return width + col.data_width + 1, col.group
+end
+
 function Spreadsheet:preUpdateLayout(parent_rect)
-    local width = self.subviews.name.data_width + 1
+    local left_group, right_group = self.subviews.left_group, self.subviews.right_group
+    left_group.visible, right_group.visible = false, false
+
+    local width, group, cur_col_group = self.subviews.name.data_width + 1, '', ''
+    local prev_col_group, next_col_group
     for idx, col in ipairs(self.cols.subviews) do
-        width = self:update_col_layout(idx, col, width, parent_rect.width)
+        local prev_group = group
+        width, group = self:update_col_layout(idx, col, width, group, parent_rect.width)
+        if not next_col_group and group ~= '' and not col.visible and col.group ~= cur_col_group then
+            next_col_group = col.group
+            local str = next_col_group .. string.char(26)  -- right arrow
+            right_group:setLabel(str)
+            right_group.frame.w = #str + 2
+            right_group.label.on_activate=self:callback('jump_to_group', next_col_group)
+            right_group.visible = true
+        end
+        if cur_col_group ~= col.group then
+            prev_col_group = cur_col_group
+        end
+        cur_col_group = col.group
+        if prev_group == '' and group ~= '' and prev_col_group and prev_col_group ~= '' then
+            local str = string.char(27) .. prev_col_group  -- left arrow
+            left_group:setLabel(str)
+            left_group.frame.w = #str + 2
+            left_group.label.on_activate=self:callback('jump_to_group', prev_col_group)
+            left_group.visible = true
+        end
     end
 end
 
 function Spreadsheet:render(dc)
     local page_top = self.list.page_top
-    for idx, col in ipairs(self.cols.subviews) do
+    for _, col in ipairs(self.cols.subviews) do
         col.subviews.col_list.page_top = page_top
     end
     Spreadsheet.super.render(self, dc)
+end
+
+function Spreadsheet:onInput(keys)
+    if keys.KEYBOARD_CURSOR_LEFT then
+        self.left_col = math.max(1, self.left_col - 1)
+        self:updateLayout()
+    elseif keys.KEYBOARD_CURSOR_RIGHT then
+        self.left_col = math.min(#self.cols.subviews, self.left_col + 1)
+        self:updateLayout()
+    end
+    return Spreadsheet.super.onInput(self, keys)
 end
 
 ------------------------
@@ -259,8 +349,9 @@ Manipulator = defclass(Manipulator, widgets.Window)
 Manipulator.ATTRS{
     frame_title='Unit Overview and Manipulator',
     frame={w=110, h=40},
+    frame_inset={t=1, l=1, r=1, b=0},
     resizable=true,
-    resize_min={w=70, h=25},
+    resize_min={w=70, h=30},
 }
 
 function Manipulator:init()
@@ -268,9 +359,9 @@ function Manipulator:init()
         widgets.EditField{
             view_id='search',
             frame={l=0, t=0},
+            key='FILTER',
             label_text='Search: ',
-            on_char=function(ch) return ch:match('[%l -]') end,
-            on_change=function() self.subviews.sheet:refresh() end,
+            on_change=function(val) self.subviews.sheet:filter(val) end,
         },
         widgets.Divider{
             frame={l=0, r=0, t=2, h=1},
@@ -291,24 +382,63 @@ function Manipulator:init()
         widgets.Panel{
             frame={l=0, r=0, b=0, h=5},
             subviews={
-                widgets.Label{
+                widgets.WrappedLabel{
                     frame={t=0, l=0},
-                    text='Use arrow keys to navigate cells.',
+                    text_to_wrap='Use arrow keys or middle click drag to navigate cells. Left click or ENTER to toggle current cell.',
+                },
+                widgets.Label{
+                    frame={b=2, l=0},
+                    text='Current column:',
                 },
                 widgets.HotkeyLabel{
-                    frame={b=2, l=0},
-                    label='Sort/reverse sort by current column',
+                    frame={b=2, l=17},
+                    auto_width=true,
+                    label='Sort/reverse sort',
                     key='CUSTOM_SHIFT_S',
-                    on_activate=function() end, -- TODO
+                    on_activate=function() self.subviews.sheet:sort_by_current_row() end,
+                },
+                widgets.HotkeyLabel{
+                    frame={b=2, l=39},
+                    auto_width=true,
+                    label='Hide',
+                    key='CUSTOM_SHIFT_H',
+                    on_activate=function() self.subviews.sheet:hide_current_row() end,
+                },
+                widgets.Label{
+                    frame={b=1, l=0},
+                    text='Current group:',
+                },
+                widgets.HotkeyLabel{
+                    frame={b=1, l=17},
+                    auto_width=true,
+                    label='Next group',
+                    key='CUSTOM_CTRL_T',
+                    on_activate=function()  end,
+                },
+                widgets.HotkeyLabel{
+                    frame={b=1, l=37},
+                    auto_width=true,
+                    label='Hide',
+                    key='CUSTOM_CTRL_H',
+                    on_activate=function() self.subviews.sheet:hide_current_row() end,
+                },
+                widgets.HotkeyLabel{
+                    frame={b=1, l=51},
+                    auto_width=true,
+                    label='Show hidden',
+                    key='CUSTOM_CTRL_W',
+                    on_activate=function() self.subviews.sheet:hide_current_row() end,
                 },
                 widgets.HotkeyLabel{
                     frame={b=0, l=0},
                     auto_width=true,
-                    label='Refresh', -- TODO add warning if citizen list has changed and needs refreshing
+                    label='Refresh', -- TODO: add warning if citizen list has changed and needs refreshing
                     key='CUSTOM_SHIFT_R',
-                    on_activate=function() end, -- TODO
+                    on_activate=function()
+                        self.subviews.sheet:refresh()
+                        self.subviews.sheet:filter(self.subviews.search.text)
+                    end,
                 },
-                -- TODO moar hotkeys
             },
         },
     }
