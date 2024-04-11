@@ -8,7 +8,7 @@ local widgets = require("gui.widgets")
 
 local CONFIG_FILE = 'dfhack-config/manipulator.json'
 
-local config = json.open(CONFIG_FILE)
+config = config or json.open(CONFIG_FILE)
 
 ------------------------
 -- Column
@@ -16,29 +16,20 @@ local config = json.open(CONFIG_FILE)
 
 Column = defclass(Column, widgets.Panel)
 Column.ATTRS{
-    label='',
-    data_fn=DEFAULT_NIL,
-    count_fn=DEFAULT_NIL,
-    make_sort_order_fn=DEFAULT_NIL,
+    idx=DEFAULT_NIL,
+    label=DEFAULT_NIL,
     group='',
     label_inset=0,
     data_width=4,
     hidden=DEFAULT_NIL,
+    shared=DEFAULT_NIL,
+    data_fn=DEFAULT_NIL,
+    count_fn=DEFAULT_NIL,
+    cmp_fn=DEFAULT_NIL,
 }
 
 function Column:init()
     self.frame = utils.assign({t=0, b=0, l=0, w=14}, self.frame or {})
-
-    if not self.make_sort_order_fn then
-        self.make_sort_order_fn = function(unit_ids)
-            local spec = {key=function(choice) return self.data_fn(df.unit.find(choice.unit_id)) end}
-            return utils.make_sort_order(choices, {spec})
-        end
-    end
-
-    if self.hidden == nil then
-        self.hidden = safe_index(config.data, 'cols', self.label, 'hidden')
-    end
 
     self:addviews{
         widgets.TextButton{
@@ -60,7 +51,7 @@ function Column:init()
                     view_id='col_label',
                     frame={l=self.label_inset, t=4},
                     label=self.label,
-                    on_activate=function() end, -- TODO: sort by this column
+                    on_activate=self:callback('sort'),
                 },
             },
         },
@@ -79,28 +70,75 @@ function Column:init()
     }
 
     self.subviews.col_list.scrollbar.visible = false
+    self.dirty = true
 end
 
-function Column:set_data(units, visible_unit_ids)
-    local choices = {}
+function Column:sort()
+    if self.dirty then
+        self:refresh()
+    end
+    if self.shared.sort_idx == self.idx then
+        self.shared.sort_rev = not self.shared.sort_rev
+    else
+        self.shared.sort_idx = self.idx
+        self.shared.sort_rev = false
+    end
+    local spec = {compare=self.cmp_fn, reverse=self.shared.sort_rev, key=function(choice) return choice.data end}
+    local ordered_col_data = {}
+    for i, ordered_i in ipairs(self.shared.sort_order) do
+    end
+    local sort_order = utils.make_sort_order(ordered_col_data, {spec})
+end
+
+function Column:get_units()
+    if self.shared.cache.units then return self.shared.cache.units end
+    local units = {}
+    for _, unit_id in ipairs(self.shared.unit_ids) do
+        local unit = df.unit.find(unit_id)
+        if unit then
+            table.insert(units, unit)
+        else
+            self.shared.fault = true
+        end
+    end
+    self.shared.cache.units = units
+    return units
+end
+
+function Column:refresh()
+    local col_data, choices = {}, {}
     local current, total = 0, 0
     local next_id_idx = 1
-    for _, unit in ipairs(units) do
-        local val = self.count_fn(unit)
-        if unit.id == visible_unit_ids[next_id_idx] then
-            local data = self.data_fn(unit)
+    for _, unit in ipairs(self:get_units()) do
+        local data = self.data_fn(unit)
+        local val = self.count_fn(data)
+        if unit.id == self.shared.filtered_unit_ids[next_id_idx] then
+            table.insert(col_data, data)
             table.insert(choices, {
-                text=(not data or data == 0) and '-' or tostring(data),
-                unit_id=unit.id,
+                text=function()
+                    local ordered_data = col_data[self.shared.sort_order[next_id_idx]]
+                    return (not data or data == 0) and '-' or tostring(data)
+                end,
             })
             current = current + val
             next_id_idx = next_id_idx + 1
         end
         total = total + val
     end
+
+    self.col_data = col_data
     self.subviews.col_current:setText(tostring(current))
     self.subviews.col_total:setText(tostring(total))
     self.subviews.col_list:setChoices(choices)
+
+    self.dirty = false
+end
+
+function Column:render(dc)
+    if self.dirty then
+        self:refresh()
+    end
+    Column.super.render(self, dc)
 end
 
 function Column:set_stem_height(h)
@@ -119,8 +157,7 @@ DataColumn.ATTRS{
 
 function DataColumn:init()
     if not self.count_fn then
-        self.count_fn = function(unit)
-            local data = self.data_fn(unit)
+        self.count_fn = function(data)
             if not data then return 0 end
             if type(data) == 'number' then return data > 0 and 1 or 0 end
             return 1
@@ -139,7 +176,7 @@ ToggleColumn.ATTRS{
 
 function ToggleColumn:init()
     if not self.count_fn then
-        self.count_fn = function(unit) return self.data_fn(unit) and 1 or 0 end
+        self.count_fn = function(data) return data and 1 or 0 end
     end
 end
 
@@ -151,15 +188,21 @@ Spreadsheet = defclass(Spreadsheet, widgets.Panel)
 
 function Spreadsheet:init()
     self.left_col = 1
+    self.dirty = true
+
+    self.shared = {sort_idx=-1, sort_rev=false, cache={}, unit_ids={}, filtered_unit_ids={}, sort_order={}}
 
     local cols = widgets.Panel{}
     self.cols = cols
 
     cols:addviews{
         ToggleColumn{
+            view_id='favorites',
+            idx=#cols.subviews+1,
             label='Favorites',
             data_fn=function(unit) return utils.binsearch(ensure_key(config.data, 'favorites'), unit.id) end,
             group='tags',
+            shared=self.shared,
         },
     }
 
@@ -168,11 +211,13 @@ function Spreadsheet:init()
         if caption then
             cols:addviews{
                 DataColumn{
+                    idx=#cols.subviews+1,
                     label=caption,
                     data_fn=function(unit)
                         return (utils.binsearch(unit.status.current_soul.skills, i, 'id') or {rating=0}).rating
                     end,
                     group='skills',
+                    shared=self.shared,
                 }
             }
         end
@@ -181,11 +226,13 @@ function Spreadsheet:init()
     for _, wd in ipairs(df.global.plotinfo.labor_info.work_details) do
         cols:addviews{
             ToggleColumn{
+                idx=#cols.subviews+1,
                 label=wd.name,
                 data_fn=function(unit)
                     return utils.binsearch(wd.assigned_units, unit.id) and true or false
                 end,
                 group='work details',
+                shared=self.shared,
             }
         }
     end
@@ -193,12 +240,12 @@ function Spreadsheet:init()
     self:addviews{
         widgets.TextButton{
             view_id='left_group',
-            frame={t=0, l=0, h=1},
+            frame={t=1, l=0, h=1},
             visible=false,
         },
         widgets.TextButton{
             view_id='right_group',
-            frame={t=0, r=0, h=1},
+            frame={t=1, r=0, h=1},
             visible=false,
         },
         widgets.Label{
@@ -212,10 +259,12 @@ function Spreadsheet:init()
         DataColumn{
             view_id='name',
             frame={w=30},
+            idx=0,
             label='Name',
             label_inset=8,
             data_fn=dfhack.units.getReadableName,
             data_width=30,
+            shared=self.shared,
         },
         cols,
     }
@@ -230,16 +279,7 @@ function Spreadsheet:init()
     }
     self.list.scrollbar = self.subviews.scrollbar
 
-    self:refresh()
-end
-
--- TODO: apply search and filtering
-function Spreadsheet:get_visible_unit_ids(units)
-    local visible_unit_ids = {}
-    for _, unit in ipairs(units) do
-        table.insert(visible_unit_ids, unit.id)
-    end
-    return visible_unit_ids
+    self:update_headers()
 end
 
 function Spreadsheet:sort_by_current_row()
@@ -261,22 +301,46 @@ function Spreadsheet:jump_to_group(group)
     self:updateLayout()
 end
 
-function Spreadsheet:refresh()
-    local units = dfhack.units.getCitizens()
-    local visible_unit_ids = self:get_visible_unit_ids(units)
-    --local sort_order = self.subviews.name.sort_order or self.subviews.name.make_sort_order_fn(visible_unit_ids)
+function Spreadsheet:update_headers()
     local ord = 1
-    self.subviews.name:set_data(units, visible_unit_ids)
     for _, col in ipairs(self.cols.subviews) do
-        col:set_data(units, visible_unit_ids)
         if not col.hidden then
             col:set_stem_height((5-ord)%5)
             ord = ord + 1
         end
     end
-    if (self.frame_parent_rect) then
-        self:updateLayout()
+end
+
+-- TODO: apply search and filtering
+function Spreadsheet:get_visible_units(units)
+    local visible_units, visible_unit_ids = {}, {}
+    for _, unit in ipairs(units) do
+        table.insert(visible_units, unit)
+        table.insert(visible_unit_ids, unit.id)
     end
+    return visible_units, visible_unit_ids
+end
+
+function Spreadsheet:refresh()
+    self.shared.fault = false
+    self.subviews.name.dirty = true
+    for _, col in ipairs(self.cols.subviews) do
+        col.dirty = true
+    end
+    local units = dfhack.units.getCitizens()
+    self.shared.cache.units = units
+    self.shared.cache.visible_units, self.shared.visible_unit_ids = self:get_visible_units(units)
+    local sort_idx = self.shared.sort_idx
+    self.shared.sort_rev = not self.shared.sort_rev
+    if sort_idx == -1 then
+        self.subviews.name:sort()
+        self.subviews.favorites:sort()
+    elseif sort_idx == 0 then
+        self.subviews.name:sort()
+    else
+        self.cols.subviews[sort_idx]:sort()
+    end
+    self.dirty = false
 end
 
 function Spreadsheet:update_col_layout(idx, col, width, group, max_width)
@@ -323,11 +387,16 @@ function Spreadsheet:preUpdateLayout(parent_rect)
 end
 
 function Spreadsheet:render(dc)
+    if self.dirty or self.shared.fault then
+        self:refresh()
+        self:updateLayout()
+    end
     local page_top = self.list.page_top
     for _, col in ipairs(self.cols.subviews) do
         col.subviews.col_list.page_top = page_top
     end
     Spreadsheet.super.render(self, dc)
+    self.shared.cache = {}
 end
 
 function Spreadsheet:onInput(keys)
