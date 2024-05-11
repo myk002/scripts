@@ -3,12 +3,69 @@
 local gui = require("gui")
 local json = require('json')
 local overlay = require('plugins.overlay')
+local presets = reqscript('internal/manipulator/presets')
 local utils = require('utils')
 local widgets = require("gui.widgets")
 
+------------------------
+-- persistent state
+--
+
+local GLOBAL_KEY = 'manipulator'
 local CONFIG_FILE = 'dfhack-config/manipulator.json'
 
-config = config or json.open(CONFIG_FILE)
+-- persistent player (global) state schema
+local function get_default_config()
+    return {
+        tags={},
+        presets={},
+    }
+end
+
+-- persistent per-fort state schema
+local function get_default_state()
+    return {
+        favorites={},
+        tagged={},
+    }
+end
+
+-- preset schema
+local function get_default_preset()
+    return {
+        hidden_groups={},
+        hidden_cols={},
+        pinned={},
+    }
+end
+
+local function get_config()
+    local data = get_default_config()
+    local cfg = json.open(CONFIG_FILE)
+    utils.assign(data, cfg.data)
+    cfg.data = data
+    return cfg
+end
+
+config = config or get_config()
+state = state or get_default_state()
+preset = preset or get_default_preset()
+
+local function persist_state()
+    dfhack.persistent.saveSiteData(GLOBAL_KEY, state)
+end
+
+dfhack.onStateChange[GLOBAL_KEY] = function(sc)
+    if sc == SC_MAP_UNLOADED then
+        state = get_default_state()
+        return
+    end
+    if sc ~= SC_MAP_LOADED or not dfhack.world.isFortressMode() then
+        return
+    end
+    state = get_default_state()
+    utils.assign(state, dfhack.persistent.getSiteData(GLOBAL_KEY, state))
+end
 
 ------------------------
 -- Column
@@ -185,6 +242,9 @@ end
 --
 
 Spreadsheet = defclass(Spreadsheet, widgets.Panel)
+Spreadsheet.ATTRS{
+    get_units_fn=DEFAULT_NIL,
+}
 
 function Spreadsheet:init()
     self.left_col = 1
@@ -403,8 +463,14 @@ function Spreadsheet:onInput(keys)
     if keys.KEYBOARD_CURSOR_LEFT then
         self.left_col = math.max(1, self.left_col - 1)
         self:updateLayout()
+    elseif keys.KEYBOARD_CURSOR_LEFT_FAST then
+        self.left_col = math.max(1, self.left_col - 10)
+        self:updateLayout()
     elseif keys.KEYBOARD_CURSOR_RIGHT then
         self.left_col = math.min(#self.cols.subviews, self.left_col + 1)
+        self:updateLayout()
+    elseif keys.KEYBOARD_CURSOR_RIGHT_FAST then
+        self.left_col = math.min(#self.cols.subviews, self.left_col + 10)
         self:updateLayout()
     end
     return Spreadsheet.super.onInput(self, keys)
@@ -413,6 +479,8 @@ end
 ------------------------
 -- Manipulator
 --
+
+local REFRESH_MS = 1000
 
 Manipulator = defclass(Manipulator, widgets.Window)
 Manipulator.ATTRS{
@@ -424,6 +492,17 @@ Manipulator.ATTRS{
 }
 
 function Manipulator:init()
+    if dfhack.world.isFortressMode() then
+        self.get_units_fn = dfhack.units.getCitizens
+    elseif dfhack.world.isAdventureMode() then
+        self.get_units_fn = qerror('get party members')
+    else
+        self.get_units_fn = function() return utils.clone(df.global.world.units.active) end
+    end
+
+    self.needs_refresh, self.prev_unit_count, self.prev_last_unit_id = false, 0, -1
+    self:update_needs_refresh(true)
+
     self:addviews{
         widgets.EditField{
             view_id='search',
@@ -441,6 +520,7 @@ function Manipulator:init()
         Spreadsheet{
             view_id='sheet',
             frame={l=0, t=3, r=0, b=7},
+            get_units_fn=self.get_units_fn,
         },
         widgets.Divider{
             frame={l=0, r=0, b=6, h=1},
@@ -464,14 +544,14 @@ function Manipulator:init()
                     auto_width=true,
                     label='Sort/reverse sort',
                     key='CUSTOM_SHIFT_S',
-                    on_activate=function() self.subviews.sheet:sort_by_current_row() end,
+                    on_activate=function() self.subviews.sheet:sort_by_current_col() end,
                 },
                 widgets.HotkeyLabel{
                     frame={b=2, l=39},
                     auto_width=true,
                     label='Hide',
                     key='CUSTOM_SHIFT_H',
-                    on_activate=function() self.subviews.sheet:hide_current_row() end,
+                    on_activate=function() self.subviews.sheet:hide_current_col() end,
                 },
                 widgets.Label{
                     frame={b=1, l=0},
@@ -480,28 +560,33 @@ function Manipulator:init()
                 widgets.HotkeyLabel{
                     frame={b=1, l=17},
                     auto_width=true,
-                    label='Next group',
-                    key='CUSTOM_CTRL_T',
-                    on_activate=function()  end,
+                    label='Prev group',
+                    key='CUSTOM_CTRL_Y',
+                    on_activate=function() self.subviews.sheet:zoom_to_prev_group() end,
                 },
                 widgets.HotkeyLabel{
                     frame={b=1, l=37},
                     auto_width=true,
-                    label='Hide',
-                    key='CUSTOM_CTRL_H',
-                    on_activate=function() self.subviews.sheet:hide_current_row() end,
+                    label='Next group',
+                    key='CUSTOM_CTRL_T',
+                    on_activate=function() self.subviews.sheet:zoom_to_next_group() end,
                 },
                 widgets.HotkeyLabel{
-                    frame={b=1, l=51},
+                    frame={b=1, l=54},
                     auto_width=true,
-                    label='Show hidden',
-                    key='CUSTOM_CTRL_W',
-                    on_activate=function() self.subviews.sheet:hide_current_row() end,
+                    label='Hide',
+                    key='CUSTOM_CTRL_H',
+                    on_activate=function() self.subviews.sheet:hide_current_col_group() end,
                 },
                 widgets.HotkeyLabel{
                     frame={b=0, l=0},
                     auto_width=true,
-                    label='Refresh', -- TODO: add warning if citizen list has changed and needs refreshing
+                    label=function()
+                        return self.needs_refresh and 'Refresh (unit list has changed)' or 'Refresh'
+                    end,
+                    text_pen=function()
+                        return self.needs_refresh and COLOR_LIGHTRED or nil
+                    end,
                     key='CUSTOM_SHIFT_R',
                     on_activate=function()
                         self.subviews.sheet:refresh()
@@ -511,6 +596,36 @@ function Manipulator:init()
             },
         },
     }
+end
+
+function Manipulator:update_needs_refresh(initialize)
+    self.next_refresh_ms = dfhack.getTickCount() + REFRESH_MS
+
+    local units = self.get_units_fn()
+    local unit_count = #units
+    if unit_count ~= self.prev_unit_count then
+        self.needs_refresh = true
+        self.prev_unit_count = unit_count
+    end
+    if unit_count <= 0 then
+        self.prev_last_unit_id = -1
+    else
+        local last_unit_id = units[#units]
+        if last_unit_id ~= self.prev_last_unit_id then
+            self.needs_refresh = true
+            self.prev_last_unit_id = last_unit_id
+        end
+    end
+    if initialize then
+        self.needs_refresh = false
+    end
+end
+
+function Manipulator:render(dc)
+    if self.next_refresh_ms <= dfhack.getTickCount() then
+        self:update_needs_refresh()
+    end
+    Manipulator.super.render(self, dc)
 end
 
 ------------------------
@@ -537,7 +652,7 @@ end
 ManipulatorOverlay = defclass(ManipulatorOverlay, overlay.OverlayWidget)
 ManipulatorOverlay.ATTRS{
     desc='Adds a hotkey to the vanilla units screen to launch the DFHack units interface.',
-    default_pos={x=50, y=-5},
+    default_pos={x=50, y=-6},
     default_enabled=true,
     viewscreens='dwarfmode/Info/CREATURES/CITIZEN',
     frame={w=34, h=1},
@@ -560,8 +675,8 @@ OVERLAY_WIDGETS = {
 
 if dfhack_flags.module then return end
 
-if not dfhack.world.isFortressMode() or not dfhack.isMapLoaded() then
-    qerror("This script requires a fortress map to be loaded")
+if not dfhack.isMapLoaded() then
+    qerror("This script requires a map to be loaded")
 end
 
 view = view and view:raise() or ManipulatorScreen{}:show()
