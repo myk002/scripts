@@ -459,18 +459,28 @@ function Spreadsheet:render(dc)
     self.shared.cache = {}
 end
 
+function Spreadsheet:get_num_visible_cols()
+    local count = 0
+    for _,col in ipairs(self.cols.subviews) do
+        if col.visible then
+            count = count + 1
+        end
+    end
+    return count
+end
+
 function Spreadsheet:onInput(keys)
     if keys.KEYBOARD_CURSOR_LEFT then
         self.left_col = math.max(1, self.left_col - 1)
         self:updateLayout()
     elseif keys.KEYBOARD_CURSOR_LEFT_FAST then
-        self.left_col = math.max(1, self.left_col - 10)
+        self.left_col = math.max(1, self.left_col - self:get_num_visible_cols())
         self:updateLayout()
     elseif keys.KEYBOARD_CURSOR_RIGHT then
         self.left_col = math.min(#self.cols.subviews, self.left_col + 1)
         self:updateLayout()
     elseif keys.KEYBOARD_CURSOR_RIGHT_FAST then
-        self.left_col = math.min(#self.cols.subviews, self.left_col + 10)
+        self.left_col = math.min(#self.cols.subviews, self.left_col + self:get_num_visible_cols())
         self:updateLayout()
     end
     return Spreadsheet.super.onInput(self, keys)
