@@ -115,10 +115,12 @@ function Column:init()
         widgets.Label{
             view_id='col_current',
             frame={t=7, l=1+self.label_inset, w=4},
+            auto_height=false,
         },
         widgets.Label{
             view_id='col_total',
             frame={t=8, l=1+self.label_inset, w=4},
+            auto_height=false,
         },
         widgets.List{
             view_id='col_list',
@@ -255,6 +257,12 @@ function DataColumn:init()
             if not data then return 0 end
             if type(data) == 'number' then return data > 0 and 1 or 0 end
             return 1
+        end
+    end
+    if not self.cmp_fn then
+        self.cmp_fn = function(a, b)
+            if type(a) == 'number' then return -utils.compare(a, b) end
+            return utils.compare(a, b)
         end
     end
 end
@@ -473,13 +481,13 @@ function Spreadsheet:update_headers()
 end
 
 -- TODO: apply search and filtering
-function Spreadsheet:get_visible_units(units)
-    local visible_units, visible_unit_ids = {}, {}
+function Spreadsheet:filter_units(units)
+    local unit_ids, filtered_unit_ids = {}, {}
     for _, unit in ipairs(units) do
-        table.insert(visible_units, unit)
-        table.insert(visible_unit_ids, unit.id)
+        table.insert(unit_ids, unit.id)
+        table.insert(filtered_unit_ids, unit.id)
     end
-    return visible_units, visible_unit_ids
+    return unit_ids, filtered_unit_ids
 end
 
 function Spreadsheet:refresh()
@@ -492,7 +500,7 @@ function Spreadsheet:refresh()
     end
     local units = self.get_units_fn()
     cache.units = units
-    cache.visible_units, shared.filtered_unit_ids = self:get_visible_units(units)
+    shared.unit_ids, shared.filtered_unit_ids = self:filter_units(units)
     shared.sort_stack[#shared.sort_stack].col:sort()
     self.dirty = false
 end
