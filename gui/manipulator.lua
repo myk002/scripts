@@ -4,6 +4,7 @@ local gui = require("gui")
 local json = require('json')
 local overlay = require('plugins.overlay')
 local presets = reqscript('internal/manipulator/presets')
+local textures = require('gui.textures')
 local utils = require('utils')
 local widgets = require("gui.widgets")
 
@@ -73,7 +74,6 @@ end
 
 Column = defclass(Column, widgets.Panel)
 Column.ATTRS{
-    idx=DEFAULT_NIL,
     label=DEFAULT_NIL,
     group='',
     label_inset=0,
@@ -83,6 +83,8 @@ Column.ATTRS{
     data_fn=DEFAULT_NIL,
     count_fn=DEFAULT_NIL,
     cmp_fn=DEFAULT_NIL,
+    choice_fn=DEFAULT_NIL,
+    on_select=DEFAULT_NIL,
 }
 
 function Column:init()
@@ -125,6 +127,7 @@ function Column:init()
         widgets.List{
             view_id='col_list',
             frame={t=10, l=0, w=self.data_width},
+            on_select=self.on_select,
         },
     }
 
@@ -206,16 +209,7 @@ function Column:refresh()
         if unit.id == self.shared.filtered_unit_ids[next_id_idx] then
             local idx = next_id_idx
             table.insert(col_data, data)
-            table.insert(choices, {
-                text={
-                    {
-                        text=function()
-                            local ordered_data = col_data[self.shared.sort_order[idx]]
-                            return (not ordered_data or ordered_data == 0) and '-' or tostring(ordered_data)
-                        end,
-                    },
-                },
-            })
+            table.insert(choices, self.choice_fn(function() return col_data[self.shared.sort_order[idx]] end))
             current = current + val
             next_id_idx = next_id_idx + 1
         end
@@ -247,40 +241,90 @@ end
 -- DataColumn
 --
 
+local function data_cmp(a, b)
+    if type(a) == 'number' then return -utils.compare(a, b) end
+    return utils.compare(a, b)
+end
+
+local function data_count(data)
+    if not data then return 0 end
+    if type(data) == 'number' then return data > 0 and 1 or 0 end
+    return 1
+end
+
+local function data_choice(get_ordered_data_fn)
+    return {
+        text={
+            {
+                text=function()
+                    local ordered_data = get_ordered_data_fn()
+                    return (not ordered_data or ordered_data == 0) and '-' or tostring(ordered_data)
+                end,
+            },
+        },
+    }
+end
+
 DataColumn = defclass(DataColumn, Column)
 DataColumn.ATTRS{
+    cmp_fn=data_cmp,
+    count_fn=data_count,
+    choice_fn=data_choice,
 }
-
-function DataColumn:init()
-    if not self.count_fn then
-        self.count_fn = function(data)
-            if not data then return 0 end
-            if type(data) == 'number' then return data > 0 and 1 or 0 end
-            return 1
-        end
-    end
-    if not self.cmp_fn then
-        self.cmp_fn = function(a, b)
-            if type(a) == 'number' then return -utils.compare(a, b) end
-            return utils.compare(a, b)
-        end
-    end
-end
 
 ------------------------
 -- ToggleColumn
 --
 
+local ENABLED_PEN_LEFT = dfhack.pen.parse{fg=COLOR_CYAN,
+        tile=curry(textures.tp_control_panel, 1), ch=string.byte('[')}
+local ENABLED_PEN_CENTER = dfhack.pen.parse{fg=COLOR_LIGHTGREEN,
+        tile=curry(textures.tp_control_panel, 2) or nil, ch=251} -- check
+local ENABLED_PEN_RIGHT = dfhack.pen.parse{fg=COLOR_CYAN,
+        tile=curry(textures.tp_control_panel, 3) or nil, ch=string.byte(']')}
+local DISABLED_PEN_LEFT = dfhack.pen.parse{fg=COLOR_CYAN,
+        tile=curry(textures.tp_control_panel, 4) or nil, ch=string.byte('[')}
+local DISABLED_PEN_CENTER = dfhack.pen.parse{fg=COLOR_RED,
+        tile=curry(textures.tp_control_panel, 5) or nil, ch=string.byte('x')}
+local DISABLED_PEN_RIGHT = dfhack.pen.parse{fg=COLOR_CYAN,
+        tile=curry(textures.tp_control_panel, 6) or nil, ch=string.byte(']')}
+
+local function toggle_count(data)
+    return data and 1 or 0
+end
+
+local function toggle_choice(get_ordered_data_fn)
+    local function get_enabled_button_token(enabled_tile, disabled_tile)
+        return {
+            tile=function() return get_ordered_data_fn() and enabled_tile or disabled_tile end,
+        }
+    end
+    return {
+        text={
+            get_enabled_button_token(ENABLED_PEN_LEFT, DISABLED_PEN_LEFT),
+            get_enabled_button_token(ENABLED_PEN_CENTER, DISABLED_PEN_CENTER),
+            get_enabled_button_token(ENABLED_PEN_RIGHT, DISABLED_PEN_RIGHT),
+        },
+    }
+end
+
 ToggleColumn = defclass(ToggleColumn, Column)
 ToggleColumn.ATTRS{
-    on_toggle=DEFAULT_NIL,
+    count_fn=toggle_count,
+    choice_fn=toggle_choice,
 }
 
-function ToggleColumn:init()
-    if not self.count_fn then
-        self.count_fn = function(data) return data and 1 or 0 end
-    end
+------------------------
+-- TagColumn
+--
+
+local function tag_select(_, choice)
 end
+
+TagColumn = defclass(TagColumn, ToggleColumn)
+TagColumn.ATTRS{
+    on_select=tag_select,
+}
 
 ------------------------
 -- Spreadsheet
@@ -321,16 +365,37 @@ function Spreadsheet:init()
     cols:addviews{
         ToggleColumn{
             view_id='favorites',
-            label='Favorites',
-            data_fn=function(unit) return utils.binsearch(ensure_key(config.data, 'favorites'), unit.id) end,
             group='tags',
+            label='Favorites',
             shared=self.shared,
+            data_fn=function(unit) return utils.binsearch(ensure_key(config.data, 'favorites'), unit.id) end,
         },
         DataColumn{
-            label='Stress',
-            data_fn=function(unit) return unit.status.current_soul.personality.stress end,
             group='summary',
+            label='Stress',
             shared=self.shared,
+            data_fn=function(unit) return unit.status.current_soul.personality.stress end,
+            choice_fn=function(get_ordered_data_fn)
+                return {
+                    text={
+                        {
+                            text=function()
+                                local ordered_data = get_ordered_data_fn()
+                                if ordered_data > 99999 then
+                                    return '>99k'
+                                elseif ordered_data > 9999 then
+                                    return ('%3dk'):format(ordered_data // 1000)
+                                elseif ordered_data < -99999 then
+                                    return ' -' .. string.char(236)  -- -∞
+                                elseif ordered_data < -999 then
+                                    return ('%3dk'):format(-(-ordered_data // 1000))
+                                end
+                                return tostring(ordered_data)
+                            end,
+                        },
+                    },
+                }
+            end,
         }
     }
 
@@ -339,12 +404,12 @@ function Spreadsheet:init()
         if caption then
             cols:addviews{
                 DataColumn{
+                    group='skills',
                     label=caption,
+                    shared=self.shared,
                     data_fn=function(unit)
                         return (utils.binsearch(unit.status.current_soul.skills, i, 'id') or {rating=0}).rating
                     end,
-                    group='skills',
-                    shared=self.shared,
                 }
             }
         end
@@ -353,12 +418,12 @@ function Spreadsheet:init()
     for _, wd in ipairs(df.global.plotinfo.labor_info.work_details) do
         cols:addviews{
             ToggleColumn{
+                group='work details',
                 label=wd.name,
+                shared=self.shared,
                 data_fn=function(unit)
                     return utils.binsearch(wd.assigned_units, unit.id) and true or false
                 end,
-                group='work details',
-                shared=self.shared,
             }
         }
     end
@@ -366,24 +431,24 @@ function Spreadsheet:init()
     for _, workshop in ipairs(df.global.world.buildings.other.FURNACE_ANY) do
         cols:addviews{
             ToggleColumn{
+                group='workshops',
                 label=get_workshop_label(workshop, df.furnace_type, df.global.world.raws.buildings.furnaces),
+                shared=self.shared,
                 data_fn=function(unit)
                     return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
                 end,
-                group='workshops',
-                shared=self.shared,
             }
         }
     end
     for _, workshop in ipairs(df.global.world.buildings.other.WORKSHOP_ANY) do
         cols:addviews{
             ToggleColumn{
+                group='workshops',
                 label=get_workshop_label(workshop, df.workshop_type, df.global.world.raws.buildings.workshops),
+                shared=self.shared,
                 data_fn=function(unit)
                     return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
                 end,
-                group='workshops',
-                shared=self.shared,
             }
         }
     end
