@@ -108,7 +108,7 @@ function Column:init()
                     view_id='col_label',
                     frame={l=self.label_inset, t=4},
                     label=self.label,
-                    on_activate=self:callback('sort'),
+                    on_activate=self:callback('sort', true),
                 },
             },
         },
@@ -127,24 +127,52 @@ function Column:init()
     }
 
     self.subviews.col_list.scrollbar.visible = false
+    self.col_data = {}
     self.dirty = true
 end
 
-function Column:sort()
+function Column:sort(make_primary)
     if self.dirty then
         self:refresh()
     end
-    if self.shared.sort_idx == self.idx then
-        self.shared.sort_rev = not self.shared.sort_rev
-    else
-        self.shared.sort_idx = self.idx
-        self.shared.sort_rev = false
+    local sort_stack = self.shared.sort_stack
+    if make_primary then
+        -- we are newly sorting by this column: reverse sort if we're already on top of the
+        -- stack; otherwise put us on top of the stack
+        local top = sort_stack[#sort_stack]
+        if top.col == self then
+            top.rev = not top.rev
+        else
+            for idx,sort_spec in ipairs(sort_stack) do
+                if sort_spec.col == self then
+                    table.remove(sort_stack, idx)
+                    break
+                end
+            end
+            table.insert(sort_stack, {col=self, rev=false})
+        end
     end
-    local spec = {compare=self.cmp_fn, reverse=self.shared.sort_rev, key=function(choice) return choice.data end}
-    local ordered_col_data = {}
-    for i, ordered_i in ipairs(self.shared.sort_order) do
+    local compare = function(a, b)
+        for idx=#sort_stack,1,-1 do
+            local sort_spec = sort_stack[idx]
+            local col = sort_spec.col
+            local first, second
+            if sort_spec.rev then
+                first, second = col.col_data[b], col.col_data[a]
+            else
+                first, second = col.col_data[a], col.col_data[b]
+            end
+            if first == second then goto continue end
+            if not first then return 1 end
+            if not second then return -1 end
+            local ret = (col.cmp_fn or utils.compare)(first, second)
+            if ret ~= 0 then return ret end
+            ::continue::
+        end
+        return 0
     end
-    local sort_order = utils.make_sort_order(ordered_col_data, {spec})
+    local spec = {compare=compare}
+    self.shared.sort_order = utils.make_sort_order(self.shared.sort_order, {spec})
 end
 
 function Column:get_units()
@@ -172,10 +200,12 @@ function Column:refresh()
         if unit.id == self.shared.filtered_unit_ids[next_id_idx] then
             table.insert(col_data, data)
             table.insert(choices, {
-                text=function()
-                    local ordered_data = col_data[self.shared.sort_order[next_id_idx]]
-                    return (not data or data == 0) and '-' or tostring(data)
-                end,
+                {
+                    text=function()
+                        local ordered_data = col_data[self.shared.sort_order[next_id_idx]]
+                        return (not ordered_data or ordered_data == 0) and '-' or tostring(ordered_data)
+                    end,
+                },
             })
             current = current + val
             next_id_idx = next_id_idx + 1
@@ -250,7 +280,13 @@ function Spreadsheet:init()
     self.left_col = 1
     self.dirty = true
 
-    self.shared = {sort_idx=-1, sort_rev=false, cache={}, unit_ids={}, filtered_unit_ids={}, sort_order={}}
+    self.shared = {
+        unit_ids={},
+        filtered_unit_ids={},
+        sort_stack={},
+        sort_order={},  -- list of indices into filtered_unit_ids (or cache.filtered_units)
+        cache={},       -- cached pointers; reset at end of frame
+    }
 
     local cols = widgets.Panel{}
     self.cols = cols
@@ -258,12 +294,17 @@ function Spreadsheet:init()
     cols:addviews{
         ToggleColumn{
             view_id='favorites',
-            idx=#cols.subviews+1,
             label='Favorites',
             data_fn=function(unit) return utils.binsearch(ensure_key(config.data, 'favorites'), unit.id) end,
             group='tags',
             shared=self.shared,
         },
+        DataColumn{
+            label='Stress',
+            data_fn=function(unit) return unit.status.current_soul.personality.stress end,
+            group='summary',
+            shared=self.shared,
+        }
     }
 
     for i in ipairs(df.job_skill) do
@@ -271,7 +312,6 @@ function Spreadsheet:init()
         if caption then
             cols:addviews{
                 DataColumn{
-                    idx=#cols.subviews+1,
                     label=caption,
                     data_fn=function(unit)
                         return (utils.binsearch(unit.status.current_soul.skills, i, 'id') or {rating=0}).rating
@@ -286,12 +326,36 @@ function Spreadsheet:init()
     for _, wd in ipairs(df.global.plotinfo.labor_info.work_details) do
         cols:addviews{
             ToggleColumn{
-                idx=#cols.subviews+1,
                 label=wd.name,
                 data_fn=function(unit)
                     return utils.binsearch(wd.assigned_units, unit.id) and true or false
                 end,
                 group='work details',
+                shared=self.shared,
+            }
+        }
+    end
+
+    for _, workshop in ipairs(df.global.world.buildings.other.FURNACE_ANY) do
+        cols:addviews{
+            ToggleColumn{
+                label=workshop.name,
+                data_fn=function(unit)
+                    return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
+                end,
+                group='workshops',
+                shared=self.shared,
+            }
+        }
+    end
+    for _, workshop in ipairs(df.global.world.buildings.other.WORKSHOP_ANY) do
+        cols:addviews{
+            ToggleColumn{
+                label=workshop.name,
+                data_fn=function(unit)
+                    return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
+                end,
+                group='workshops',
                 shared=self.shared,
             }
         }
@@ -319,7 +383,6 @@ function Spreadsheet:init()
         DataColumn{
             view_id='name',
             frame={w=30},
-            idx=0,
             label='Name',
             label_inset=8,
             data_fn=dfhack.units.getReadableName,
@@ -328,6 +391,10 @@ function Spreadsheet:init()
         },
         cols,
     }
+
+    -- set up initial sort: primary favorites, secondary name
+    self.shared.sort_stack[1] = {col=self.subviews.name, rev=false}
+    self.shared.sort_stack[2] = {col=self.subviews.favorites, rev=false}
 
     self.list = self.subviews.name.subviews.col_list
     self:addviews{
@@ -342,13 +409,28 @@ function Spreadsheet:init()
     self:update_headers()
 end
 
-function Spreadsheet:sort_by_current_row()
+function Spreadsheet:sort_by_current_col()
+    -- TODO
 end
 
 function Spreadsheet:filter(search)
+    -- TODO
 end
 
-function Spreadsheet:hide_current_row()
+function Spreadsheet:zoom_to_prev_group()
+    -- TODO
+end
+
+function Spreadsheet:zoom_to_next_group()
+    -- TODO
+end
+
+function Spreadsheet:hide_current_col()
+    -- TODO
+end
+
+function Spreadsheet:hide_current_col_group()
+    -- TODO
 end
 
 function Spreadsheet:jump_to_group(group)
@@ -382,24 +464,18 @@ function Spreadsheet:get_visible_units(units)
 end
 
 function Spreadsheet:refresh()
-    self.shared.fault = false
+    local shared = self.shared
+    local cache = shared.cache
+    shared.fault = false
     self.subviews.name.dirty = true
     for _, col in ipairs(self.cols.subviews) do
         col.dirty = true
     end
-    local units = dfhack.units.getCitizens()
-    self.shared.cache.units = units
-    self.shared.cache.visible_units, self.shared.visible_unit_ids = self:get_visible_units(units)
-    local sort_idx = self.shared.sort_idx
-    self.shared.sort_rev = not self.shared.sort_rev
-    if sort_idx == -1 then
-        self.subviews.name:sort()
-        self.subviews.favorites:sort()
-    elseif sort_idx == 0 then
-        self.subviews.name:sort()
-    else
-        self.cols.subviews[sort_idx]:sort()
-    end
+    local units = self.get_units_fn()
+    cache.units = units
+    cache.visible_units, shared.filtered_unit_ids = self:get_visible_units(units)
+    shared.sort_order = utils.tabulate(function(i) return i end, 1, #shared.filtered_unit_ids)
+    shared.sort_stack[#shared.sort_stack].col:sort()
     self.dirty = false
 end
 
@@ -582,7 +658,7 @@ function Manipulator:init()
                     on_activate=function() self.subviews.sheet:zoom_to_next_group() end,
                 },
                 widgets.HotkeyLabel{
-                    frame={b=1, l=54},
+                    frame={b=1, l=57},
                     auto_width=true,
                     label='Hide',
                     key='CUSTOM_CTRL_H',
