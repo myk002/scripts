@@ -132,9 +132,6 @@ function Column:init()
 end
 
 function Column:sort(make_primary)
-    if self.dirty then
-        self:refresh()
-    end
     local sort_stack = self.shared.sort_stack
     if make_primary then
         -- we are newly sorting by this column: reverse sort if we're already on top of the
@@ -150,6 +147,12 @@ function Column:sort(make_primary)
                 end
             end
             table.insert(sort_stack, {col=self, rev=false})
+        end
+    end
+    for _,sort_spec in ipairs(sort_stack) do
+        local col = sort_spec.col
+        if col.dirty then
+            col:refresh()
         end
     end
     local compare = function(a, b)
@@ -171,8 +174,9 @@ function Column:sort(make_primary)
         end
         return 0
     end
+    local order = utils.tabulate(function(i) return i end, 1, #self.shared.filtered_unit_ids)
     local spec = {compare=compare}
-    self.shared.sort_order = utils.make_sort_order(self.shared.sort_order, {spec})
+    self.shared.sort_order = utils.make_sort_order(order, {spec})
 end
 
 function Column:get_units()
@@ -198,13 +202,16 @@ function Column:refresh()
         local data = self.data_fn(unit)
         local val = self.count_fn(data)
         if unit.id == self.shared.filtered_unit_ids[next_id_idx] then
+            local idx = next_id_idx
             table.insert(col_data, data)
             table.insert(choices, {
-                {
-                    text=function()
-                        local ordered_data = col_data[self.shared.sort_order[next_id_idx]]
-                        return (not ordered_data or ordered_data == 0) and '-' or tostring(ordered_data)
-                    end,
+                text={
+                    {
+                        text=function()
+                            local ordered_data = col_data[self.shared.sort_order[idx]]
+                            return (not ordered_data or ordered_data == 0) and '-' or tostring(ordered_data)
+                        end,
+                    },
                 },
             })
             current = current + val
@@ -276,6 +283,18 @@ Spreadsheet.ATTRS{
     get_units_fn=DEFAULT_NIL,
 }
 
+local function get_workshop_label(workshop, type_enum, bld_defs)
+    if #workshop.name > 0 then
+        return workshop.name
+    end
+    local type_name = type_enum[workshop.type]
+    if type_name == 'Custom' then
+        local bld_def = bld_defs[workshop.custom_type]
+        if bld_def then return bld_def.code end
+    end
+    return type_name
+end
+
 function Spreadsheet:init()
     self.left_col = 1
     self.dirty = true
@@ -339,7 +358,7 @@ function Spreadsheet:init()
     for _, workshop in ipairs(df.global.world.buildings.other.FURNACE_ANY) do
         cols:addviews{
             ToggleColumn{
-                label=workshop.name,
+                label=get_workshop_label(workshop, df.furnace_type, df.global.world.raws.buildings.furnaces),
                 data_fn=function(unit)
                     return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
                 end,
@@ -351,7 +370,7 @@ function Spreadsheet:init()
     for _, workshop in ipairs(df.global.world.buildings.other.WORKSHOP_ANY) do
         cols:addviews{
             ToggleColumn{
-                label=workshop.name,
+                label=get_workshop_label(workshop, df.workshop_type, df.global.world.raws.buildings.workshops),
                 data_fn=function(unit)
                     return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
                 end,
@@ -474,7 +493,6 @@ function Spreadsheet:refresh()
     local units = self.get_units_fn()
     cache.units = units
     cache.visible_units, shared.filtered_unit_ids = self:get_visible_units(units)
-    shared.sort_order = utils.tabulate(function(i) return i end, 1, #shared.filtered_unit_ids)
     shared.sort_stack[#shared.sort_stack].col:sort()
     self.dirty = false
 end
@@ -671,7 +689,7 @@ function Manipulator:init()
                         return self.needs_refresh and 'Refresh (unit list has changed)' or 'Refresh'
                     end,
                     text_pen=function()
-                        return self.needs_refresh and COLOR_LIGHTRED or nil
+                        return self.needs_refresh and COLOR_LIGHTRED or COLOR_GRAY
                     end,
                     key='CUSTOM_SHIFT_R',
                     on_activate=function()
