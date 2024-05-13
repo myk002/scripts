@@ -95,6 +95,12 @@ function ColumnMenu:init()
         text='Hide group',
         fn=self.col:callback('hide_group'),
     })
+    if self.col.zoom_fn then
+        table.insert(choices, {
+            text='Zoom to',
+            fn=self.col.zoom_fn,
+        })
+    end
 
     self:addviews{
         widgets.List{
@@ -148,6 +154,7 @@ Column.ATTRS{
     count_fn=DEFAULT_NIL,
     cmp_fn=DEFAULT_NIL,
     choice_fn=DEFAULT_NIL,
+    zoom_fn=DEFAULT_NIL,
 }
 
 local CH_DOT = string.char(15)
@@ -233,7 +240,7 @@ function Column:init()
                         },
                         ColumnMenu{
                             view_id='col_menu',
-                            frame={l=0, t=1, h=5},
+                            frame={l=0, t=1, h=self.zoom_fn and 6 or 5},
                             col=self,
                         },
                     },
@@ -647,19 +654,23 @@ function Spreadsheet:init()
     end
 
     local function add_workshops(vec, type_enum, type_defs)
-        for _, workshop in ipairs(vec) do
+        for _, bld in ipairs(vec) do
             cols:addviews{
                 ToggleColumn{
                     group='workshops',
-                    label=get_workshop_label(workshop, type_enum, type_defs),
+                    label=get_workshop_label(bld, type_enum, type_defs),
                     shared=self.shared,
-                    data_fn=curry(toggle_sorted_vec_data, workshop.profile.permitted_workers),
+                    data_fn=curry(toggle_sorted_vec_data, bld.profile.permitted_workers),
                     toggle_fn=function(unit_id, prev_val)
                         if not prev_val then
                             -- there can be only one
-                            workshop.profile.permitted_workers:resize(0)
+                            bld.profile.permitted_workers:resize(0)
                         end
-                        toggle_sorted_vec(workshop.profile.permitted_workers, unit_id, prev_val)
+                        toggle_sorted_vec(bld.profile.permitted_workers, unit_id, prev_val)
+                    end,
+                    zoom_fn=function()
+                        dfhack.gui.revealInDwarfmodeMap(
+                            xyz2pos(bld.centerx, bld.centery, bld.z), true, true)
                     end,
                 }
             }
@@ -715,6 +726,19 @@ function Spreadsheet:init()
     }
     self.namelist.scrollbar = self.subviews.scrollbar
     self.namelist:setFocus(true)
+end
+
+function Spreadsheet:zoom_to_unit()
+    local idx = self.namelist:getSelected()
+    if not idx then return end
+    local unit = df.unit.find(self.subviews.name:get_sorted_unit_id(idx))
+    if not unit then return end
+    dfhack.gui.revealInDwarfmodeMap(
+        xyz2pos(dfhack.units.getPosition(unit)), true, true)
+end
+
+function Spreadsheet:zoom_to_col_source()
+    -- TODO
 end
 
 function Spreadsheet:sort_by_current_col()
@@ -1090,6 +1114,20 @@ function Manipulator:init()
                 },
                 widgets.HotkeyLabel{
                     frame={b=0, l=0},
+                    auto_width=true,
+                    label='Zoom to unit',
+                    key='CUSTOM_SHIFT_Z',
+                    on_activate=function() self.subviews.sheet:zoom_to_unit() end,
+                },
+                widgets.HotkeyLabel{
+                    frame={b=0, l=22},
+                    auto_width=true,
+                    label='Zoom to col source',
+                    key='CUSTOM_CTRL_Z',
+                    on_activate=function() self.subviews.sheet:zoom_to_col_source() end,
+                },
+                widgets.HotkeyLabel{
+                    frame={b=0, l=46},
                     auto_width=true,
                     label=function()
                         return self.needs_refresh and 'Refresh units (new units have arrived)' or 'Refresh units'
