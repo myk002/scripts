@@ -86,6 +86,10 @@ Column.ATTRS{
     choice_fn=DEFAULT_NIL,
 }
 
+local CH_DOT = string.char(15)
+local CH_UP = string.char(30)
+local CH_DN = string.char(31)
+
 function Column:init()
     self.frame = utils.assign({t=0, b=0, l=0, w=14}, self.frame or {})
 
@@ -105,11 +109,43 @@ function Column:init()
                     frame_style=gui.FRAME_INTERIOR,
                     frame_style_b=false,
                 },
-                widgets.HotkeyLabel{
+                widgets.Panel{
                     view_id='col_label',
                     frame={l=self.label_inset, t=4},
-                    label=self.label,
-                    on_activate=self:callback('sort', true),
+                    subviews={
+                        widgets.HotkeyLabel{
+                            frame={l=0, t=0, w=1},
+                            label=CH_DN,
+                            text_pen=COLOR_LIGHTGREEN,
+                            visible=function()
+                                local sort_spec = self.shared.sort_stack[#self.shared.sort_stack]
+                                return sort_spec.col == self and not sort_spec.rev
+                            end,
+                        },
+                        widgets.HotkeyLabel{
+                            frame={l=0, t=0, w=1},
+                            label=CH_UP,
+                            text_pen=COLOR_LIGHTGREEN,
+                            visible=function()
+                                local sort_spec = self.shared.sort_stack[#self.shared.sort_stack]
+                                return sort_spec.col == self and sort_spec.rev
+                            end,
+                        },
+                        widgets.HotkeyLabel{
+                            frame={l=0, t=0, w=1},
+                            label=CH_DOT,
+                            text_pen=COLOR_GRAY,
+                            visible=function()
+                                local sort_spec = self.shared.sort_stack[#self.shared.sort_stack]
+                                return sort_spec.col ~= self
+                            end,
+                        },
+                        widgets.HotkeyLabel{
+                            frame={l=1, t=0},
+                            label=self.label,
+                            on_activate=self:callback('sort', true),
+                        },
+                    },
                 },
             },
         },
@@ -135,8 +171,14 @@ function Column:init()
     self.dirty = true
 end
 
--- overridden by subclasses
+-- extended by subclasses
 function Column:on_select(idx, choice)
+    -- conveniently, this will be nil for the namelist column itself,
+    -- avoiding an infinite loop
+    local namelist = self.parent_view.parent_view.namelist
+    if namelist then
+        namelist:setSelected(idx)
+    end
 end
 
 function Column:sort(make_primary)
@@ -339,6 +381,7 @@ ToggleColumn.ATTRS{
 }
 
 function ToggleColumn:on_select(idx, choice)
+    ToggleColumn.super.on_select(self, idx, choice)
     if not self.toggle_fn then return end
     local unit_id = self:get_sorted_unit_id(idx)
     local prev_val = self:get_sorted_data(idx)
@@ -526,15 +569,16 @@ function Spreadsheet:init()
     self.shared.sort_stack[1] = {col=self.subviews.name, rev=false}
     self.shared.sort_stack[2] = {col=self.subviews.favorites, rev=false}
 
-    self.list = self.subviews.name.subviews.col_list
+    self.namelist = self.subviews.name.subviews.col_list
     self:addviews{
             widgets.Scrollbar{
             view_id='scrollbar',
             frame={t=7, r=0},
-            on_scroll=self.list:callback('on_scrollbar'),
+            on_scroll=self.namelist:callback('on_scrollbar'),
         }
     }
-    self.list.scrollbar = self.subviews.scrollbar
+    self.namelist.scrollbar = self.subviews.scrollbar
+    self.namelist:setFocus(true)
 
     self:update_headers()
 end
@@ -659,9 +703,11 @@ function Spreadsheet:render(dc)
         self:refresh(self.prev_filter, true)
         self:updateLayout()
     end
-    local page_top = self.list.page_top
+    local page_top = self.namelist.page_top
+    local selected = self.namelist:getSelected()
     for _, col in ipairs(self.cols.subviews) do
         col.subviews.col_list.page_top = page_top
+        col.subviews.col_list:setSelected(selected)
     end
     Spreadsheet.super.render(self, dc)
     self.shared.cache = {}
@@ -728,6 +774,7 @@ function Manipulator:init()
             key='FILTER',
             label_text='Search: ',
             on_change=function(text) self.subviews.sheet:refresh(text, false) end,
+            on_unfocus=function() self.subviews.sheet.namelist:setFocus(true) end,
         },
         widgets.Divider{
             frame={l=0, r=0, t=2, h=1},
