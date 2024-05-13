@@ -69,6 +69,24 @@ dfhack.onStateChange[GLOBAL_KEY] = function(sc)
 end
 
 ------------------------
+-- ColumnMenu
+--
+
+ColumnMenu = defclass(ColumnMenu, widgets.Panel)
+ColumnMenu.ATTRS{
+    frame_style=gui.FRAME_INTERIOR,
+}
+
+function ColumnMenu:init()
+end
+
+function ColumnMenu:show()
+    self.prev_focus_owner = self.focus_group.cur
+    self.visible = true
+end
+
+
+------------------------
 -- Column
 --
 
@@ -143,7 +161,7 @@ function Column:init()
                         widgets.HotkeyLabel{
                             frame={l=1, t=0},
                             label=self.label,
-                            on_activate=self:callback('sort', true),
+                            on_activate=self:callback('on_click'),
                         },
                     },
                 },
@@ -178,6 +196,23 @@ function Column:on_select(idx, choice)
     local namelist = self.parent_view.parent_view.namelist
     if namelist then
         namelist:setSelected(idx)
+    end
+end
+
+function Column:on_click()
+    local modifiers = dfhack.internal.getModifiers()
+    if modifiers.shift then
+        for _,col in ipairs(self.parent_view.subviews) do
+            if col.group == self.group then
+                col.hidden = true
+            end
+        end
+        self.shared.refresh_headers = true
+    elseif modifiers.ctrl then
+        self.hidden = true
+        self.shared.refresh_headers = true
+    else
+        self:sort(true)
     end
 end
 
@@ -413,7 +448,6 @@ end
 function Spreadsheet:init()
     self.left_col = 1
     self.prev_filter = ''
-    self.dirty = true
 
     self.shared = {
         unit_ids={},
@@ -421,6 +455,8 @@ function Spreadsheet:init()
         sort_stack={},
         sort_order={},  -- list of indices into filtered_unit_ids (or cache.filtered_units)
         cache={},       -- cached pointers; reset at end of frame
+        refresh_units=true,
+        refresh_headers=true,
     }
 
     local cols = widgets.Panel{}
@@ -579,8 +615,6 @@ function Spreadsheet:init()
     }
     self.namelist.scrollbar = self.subviews.scrollbar
     self.namelist:setFocus(true)
-
-    self:update_headers()
 end
 
 function Spreadsheet:sort_by_current_col()
@@ -621,6 +655,7 @@ function Spreadsheet:update_headers()
             ord = ord + 1
         end
     end
+    self.shared.refresh_headers = false
 end
 
 -- TODO: support column addressing for searching/filtering (e.g. "skills/Armoring:>10")
@@ -652,7 +687,7 @@ function Spreadsheet:refresh(filter, full_refresh)
         end
     end
     shared.sort_stack[#shared.sort_stack].col:sort()
-    self.dirty = false
+    self.shared.refresh_units = false
 end
 
 function Spreadsheet:update_col_layout(idx, col, width, group, max_width)
@@ -676,6 +711,7 @@ function Spreadsheet:preUpdateLayout(parent_rect)
     for idx, col in ipairs(self.cols.subviews) do
         local prev_group = group
         width, group = self:update_col_layout(idx, col, width, group, parent_rect.width)
+        if col.hidden then goto continue end
         if not next_col_group and group ~= '' and not col.visible and col.group ~= cur_col_group then
             next_col_group = col.group
             local str = next_col_group .. string.char(26)  -- right arrow
@@ -695,12 +731,19 @@ function Spreadsheet:preUpdateLayout(parent_rect)
             left_group.label.on_activate=self:callback('jump_to_group', prev_col_group)
             left_group.visible = true
         end
+        ::continue::
     end
+    self.shared.layout_changed = false
 end
 
 function Spreadsheet:render(dc)
-    if self.dirty or self.shared.fault then
-        self:refresh(self.prev_filter, true)
+    if self.shared.refresh_headers or self.shared.refresh_units then
+        if self.shared.refresh_units then
+            self:refresh(self.prev_filter, true)
+        end
+        if self.shared.refresh_headers then
+            self:update_headers()
+        end
         self:updateLayout()
     end
     local page_top = self.namelist.page_top
@@ -725,16 +768,44 @@ end
 
 function Spreadsheet:onInput(keys)
     if keys.KEYBOARD_CURSOR_LEFT then
-        self.left_col = math.max(1, self.left_col - 1)
-        self:updateLayout()
+        for idx=self.left_col-1,1,-1 do
+            if not self.cols.subviews[idx].hidden then
+                self.left_col = idx
+                self:updateLayout()
+                break
+            end
+        end
     elseif keys.KEYBOARD_CURSOR_LEFT_FAST then
-        self.left_col = math.max(1, self.left_col - self:get_num_visible_cols())
+        local remaining = self:get_num_visible_cols()
+        for idx=self.left_col-1,1,-1 do
+            if not self.cols.subviews[idx].hidden then
+                remaining = remaining - 1
+                self.left_col = idx
+                if remaining == 0 then
+                    break
+                end
+            end
+        end
         self:updateLayout()
     elseif keys.KEYBOARD_CURSOR_RIGHT then
-        self.left_col = math.min(#self.cols.subviews, self.left_col + 1)
-        self:updateLayout()
+        for idx=self.left_col+1,#self.cols.subviews do
+            if not self.cols.subviews[idx].hidden then
+                self.left_col = idx
+                self:updateLayout()
+                break
+            end
+        end
     elseif keys.KEYBOARD_CURSOR_RIGHT_FAST then
-        self.left_col = math.min(#self.cols.subviews, self.left_col + self:get_num_visible_cols())
+        local remaining = self:get_num_visible_cols()
+        for idx=self.left_col+1,#self.cols.subviews do
+            if not self.cols.subviews[idx].hidden then
+                remaining = remaining - 1
+                self.left_col = idx
+                if remaining == 0 then
+                    break
+                end
+            end
+        end
         self:updateLayout()
     end
     return Spreadsheet.super.onInput(self, keys)
@@ -847,7 +918,7 @@ function Manipulator:init()
                     frame={b=0, l=0},
                     auto_width=true,
                     label=function()
-                        return self.needs_refresh and 'Refresh (unit list has changed)' or 'Refresh'
+                        return self.needs_refresh and 'Refresh units (new units have arrived)' or 'Refresh units'
                     end,
                     text_pen=function()
                         return self.needs_refresh and COLOR_LIGHTRED or COLOR_GRAY
