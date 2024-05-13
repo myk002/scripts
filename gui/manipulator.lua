@@ -34,8 +34,7 @@ end
 -- preset schema
 local function get_default_preset()
     return {
-        hidden_groups={},
-        hidden_cols={},
+        cols={},
         pinned={},
     }
 end
@@ -737,6 +736,7 @@ function Spreadsheet:zoom_to_unit()
         xyz2pos(dfhack.units.getPosition(unit)), true, true)
 end
 
+-- TODO these are dependent on having a column cursor
 function Spreadsheet:zoom_to_col_source()
     -- TODO
 end
@@ -750,6 +750,10 @@ function Spreadsheet:hide_current_col()
 end
 
 function Spreadsheet:hide_current_col_group()
+    -- TODO
+end
+
+function Spreadsheet:export()
     -- TODO
 end
 
@@ -1083,6 +1087,7 @@ function Manipulator:init()
                     label='Sort/reverse sort',
                     key='CUSTOM_SHIFT_S',
                     on_activate=function() self.subviews.sheet:sort_by_current_col() end,
+                    enabled=false,
                 },
                 widgets.HotkeyLabel{
                     frame={b=2, l=22},
@@ -1092,11 +1097,20 @@ function Manipulator:init()
                     on_activate=function() self.subviews.quick_jump_menu:show() end,
                 },
                 widgets.HotkeyLabel{
+                    frame={b=2, l=46},
+                    auto_width=true,
+                    label='Export to csv',
+                    key='CUSTOM_SHIFT_E',
+                    on_activate=function() self.subviews.sheet:export() end,
+                    enabled=false,
+                },
+                widgets.HotkeyLabel{
                     frame={b=1, l=0},
                     auto_width=true,
                     label='Hide column',
                     key='CUSTOM_SHIFT_H',
                     on_activate=function() self.subviews.sheet:hide_current_col() end,
+                    enabled=false,
                 },
                 widgets.HotkeyLabel{
                     frame={b=1, l=22},
@@ -1104,6 +1118,7 @@ function Manipulator:init()
                     label='Hide group',
                     key='CUSTOM_CTRL_H',
                     on_activate=function() self.subviews.sheet:hide_current_col_group() end,
+                    enabled=false,
                 },
                 widgets.HotkeyLabel{
                     frame={b=1, l=46},
@@ -1122,9 +1137,10 @@ function Manipulator:init()
                 widgets.HotkeyLabel{
                     frame={b=0, l=22},
                     auto_width=true,
-                    label='Zoom to col source',
+                    label='Zoom to source',
                     key='CUSTOM_CTRL_Z',
                     on_activate=function() self.subviews.sheet:zoom_to_col_source() end,
+                    enabled=false,
                 },
                 widgets.HotkeyLabel{
                     frame={b=0, l=46},
@@ -1133,7 +1149,7 @@ function Manipulator:init()
                         return self.needs_refresh and 'Refresh units (new units have arrived)' or 'Refresh units'
                     end,
                     text_pen=function()
-                        return self.needs_refresh and COLOR_LIGHTRED or COLOR_GRAY
+                        return self.needs_refresh and COLOR_LIGHTRED or COLOR_WHITE
                     end,
                     key='CUSTOM_SHIFT_R',
                     on_activate=function()
