@@ -75,16 +75,62 @@ end
 ColumnMenu = defclass(ColumnMenu, widgets.Panel)
 ColumnMenu.ATTRS{
     frame_style=gui.FRAME_INTERIOR,
+    frame_background=gui.CLEAR_PEN,
+    visible=false,
+    col=DEFAULT_NIL,
 }
 
 function ColumnMenu:init()
+    local choices = {}
+
+    table.insert(choices, {
+        text='Sort',
+        fn=self.col:callback('sort', true),
+    })
+    table.insert(choices, {
+        text='Hide column',
+        fn=self.col:callback('hide_column'),
+    })
+    table.insert(choices, {
+        text='Hide group',
+        fn=self.col:callback('hide_group'),
+    })
+
+    self:addviews{
+        widgets.List{
+            choices=choices,
+            on_submit=function(_, choice)
+                choice.fn()
+                self:hide()
+            end,
+        },
+    }
 end
 
 function ColumnMenu:show()
     self.prev_focus_owner = self.focus_group.cur
     self.visible = true
+    self:setFocus(true)
 end
 
+function ColumnMenu:hide()
+    self.visible = false
+    if self.prev_focus_owner then
+        self.prev_focus_owner:setFocus(true)
+    end
+end
+
+function ColumnMenu:onInput(keys)
+    if ColumnMenu.super.onInput(self, keys) then
+        return true
+    end
+    if keys._MOUSE_R then
+        self:hide()
+    elseif keys._MOUSE_L and not self:getMouseFramePos() then
+        self:hide()
+    end
+    return true
+end
 
 ------------------------
 -- Column
@@ -111,61 +157,16 @@ local CH_DN = string.char(31)
 function Column:init()
     self.frame = utils.assign({t=0, b=0, l=0, w=14}, self.frame or {})
 
+    local function show_menu()
+        self.subviews.col_menu:show()
+    end
+
     self:addviews{
         widgets.TextButton{
             view_id='col_group',
             frame={t=0, l=0, h=1, w=#self.group+2},
             label=self.group,
             visible=#self.group > 0,
-        },
-        widgets.Panel{
-            frame={t=2, l=0, h=5},
-            subviews={
-                widgets.Divider{
-                    view_id='col_stem',
-                    frame={l=self.label_inset, t=4, w=1, h=1},
-                    frame_style=gui.FRAME_INTERIOR,
-                    frame_style_b=false,
-                },
-                widgets.Panel{
-                    view_id='col_label',
-                    frame={l=self.label_inset, t=4},
-                    subviews={
-                        widgets.HotkeyLabel{
-                            frame={l=0, t=0, w=1},
-                            label=CH_DN,
-                            text_pen=COLOR_LIGHTGREEN,
-                            visible=function()
-                                local sort_spec = self.shared.sort_stack[#self.shared.sort_stack]
-                                return sort_spec.col == self and not sort_spec.rev
-                            end,
-                        },
-                        widgets.HotkeyLabel{
-                            frame={l=0, t=0, w=1},
-                            label=CH_UP,
-                            text_pen=COLOR_LIGHTGREEN,
-                            visible=function()
-                                local sort_spec = self.shared.sort_stack[#self.shared.sort_stack]
-                                return sort_spec.col == self and sort_spec.rev
-                            end,
-                        },
-                        widgets.HotkeyLabel{
-                            frame={l=0, t=0, w=1},
-                            label=CH_DOT,
-                            text_pen=COLOR_GRAY,
-                            visible=function()
-                                local sort_spec = self.shared.sort_stack[#self.shared.sort_stack]
-                                return sort_spec.col ~= self
-                            end,
-                        },
-                        widgets.HotkeyLabel{
-                            frame={l=1, t=0},
-                            label=self.label,
-                            on_activate=self:callback('on_click'),
-                        },
-                    },
-                },
-            },
         },
         widgets.Label{
             view_id='col_current',
@@ -181,6 +182,63 @@ function Column:init()
             view_id='col_list',
             frame={t=10, l=0, w=self.data_width+2}, -- +2 for the invisible scrollbar
             on_submit=self:callback('on_select'),
+        },
+        widgets.Panel{
+            frame={t=2, l=0, h=10},
+            subviews={
+                widgets.Divider{
+                    view_id='col_stem',
+                    frame={l=self.label_inset, t=4, w=1, h=1},
+                    frame_style=gui.FRAME_INTERIOR,
+                    frame_style_b=false,
+                },
+                widgets.Panel{
+                    view_id='col_label',
+                    frame={l=self.label_inset, t=4},
+                    subviews={
+                        widgets.HotkeyLabel{
+                            frame={l=0, t=0, w=1},
+                            label=CH_DN,
+                            text_pen=COLOR_LIGHTGREEN,
+                            on_activate=show_menu,
+                            visible=function()
+                                local sort_spec = self.shared.sort_stack[#self.shared.sort_stack]
+                                return sort_spec.col == self and not sort_spec.rev
+                            end,
+                        },
+                        widgets.HotkeyLabel{
+                            frame={l=0, t=0, w=1},
+                            label=CH_UP,
+                            text_pen=COLOR_LIGHTGREEN,
+                            on_activate=show_menu,
+                            visible=function()
+                                local sort_spec = self.shared.sort_stack[#self.shared.sort_stack]
+                                return sort_spec.col == self and sort_spec.rev
+                            end,
+                        },
+                        widgets.HotkeyLabel{
+                            frame={l=0, t=0, w=1},
+                            label=CH_DOT,
+                            text_pen=COLOR_GRAY,
+                            on_activate=show_menu,
+                            visible=function()
+                                local sort_spec = self.shared.sort_stack[#self.shared.sort_stack]
+                                return sort_spec.col ~= self
+                            end,
+                        },
+                        widgets.HotkeyLabel{
+                            frame={l=1, t=0},
+                            label=self.label,
+                            on_activate=self:callback('on_click'),
+                        },
+                        ColumnMenu{
+                            view_id='col_menu',
+                            frame={l=0, t=1, h=5},
+                            col=self,
+                        },
+                    },
+                },
+            },
         },
     }
 
@@ -199,18 +257,26 @@ function Column:on_select(idx, choice)
     end
 end
 
+function Column:hide_column()
+    self.hidden = true
+    self.shared.refresh_headers = true
+end
+
+function Column:hide_group()
+    for _,col in ipairs(self.parent_view.subviews) do
+        if col.group == self.group then
+            col.hidden = true
+        end
+    end
+    self.shared.refresh_headers = true
+end
+
 function Column:on_click()
     local modifiers = dfhack.internal.getModifiers()
     if modifiers.shift then
-        for _,col in ipairs(self.parent_view.subviews) do
-            if col.group == self.group then
-                col.hidden = true
-            end
-        end
-        self.shared.refresh_headers = true
+        self:hide_group()
     elseif modifiers.ctrl then
-        self.hidden = true
-        self.shared.refresh_headers = true
+        self:hide_column()
     else
         self:sort(true)
     end
@@ -425,6 +491,33 @@ function ToggleColumn:on_select(idx, choice)
 end
 
 ------------------------
+-- Cols
+--
+
+Cols = defclass(Cols, widgets.Panel)
+
+function Cols:renderSubviews(dc)
+    -- allow labels of columns to the left to overwrite the stems of columns on the right
+    for idx=#self.subviews,1,-1 do
+        local child = self.subviews[idx]
+        if utils.getval(child.visible) then
+            child:render(dc)
+        end
+    end
+    -- but group labels and popup menus on the right should overwrite long group names on the left
+    for _,child in ipairs(self.subviews) do
+        if utils.getval(child.visible) then
+            if utils.getval(child.subviews.col_group.visible) then
+                child.subviews.col_group:render(dc)
+            end
+            if utils.getval(child.subviews.col_menu.visible) then
+                child:render(dc)
+            end
+        end
+    end
+end
+
+------------------------
 -- Spreadsheet
 --
 
@@ -459,7 +552,7 @@ function Spreadsheet:init()
         refresh_headers=true,
     }
 
-    local cols = widgets.Panel{}
+    local cols = Cols{}
     self.cols = cols
 
     cols:addviews{
@@ -574,11 +667,13 @@ function Spreadsheet:init()
         widgets.TextButton{
             view_id='left_group',
             frame={t=1, l=0, h=1},
+            key='CUSTOM_CTRL_Y',
             visible=false,
         },
         widgets.TextButton{
             view_id='right_group',
             frame={t=1, r=0, h=1},
+            key='CUSTOM_CTRL_T',
             visible=false,
         },
         widgets.Label{
@@ -618,14 +713,6 @@ function Spreadsheet:init()
 end
 
 function Spreadsheet:sort_by_current_col()
-    -- TODO
-end
-
-function Spreadsheet:zoom_to_prev_group()
-    -- TODO
-end
-
-function Spreadsheet:zoom_to_next_group()
     -- TODO
 end
 
@@ -715,10 +802,10 @@ function Spreadsheet:preUpdateLayout(parent_rect)
         if not next_col_group and group ~= '' and not col.visible and col.group ~= cur_col_group then
             next_col_group = col.group
             local str = next_col_group .. string.char(26)  -- right arrow
-            right_group:setLabel(str)
-            right_group.frame.w = #str + 2
+            right_group.frame.w = #str + 10
             right_group.label.on_activate=self:callback('jump_to_group', next_col_group)
             right_group.visible = true
+            right_group:setLabel(str)
         end
         if cur_col_group ~= col.group then
             prev_col_group = cur_col_group
@@ -726,10 +813,10 @@ function Spreadsheet:preUpdateLayout(parent_rect)
         cur_col_group = col.group
         if prev_group == '' and group ~= '' and prev_col_group and prev_col_group ~= '' then
             local str = string.char(27) .. prev_col_group  -- left arrow
-            left_group:setLabel(str)
-            left_group.frame.w = #str + 2
+            left_group.frame.w = #str + 10
             left_group.label.on_activate=self:callback('jump_to_group', prev_col_group)
             left_group.visible = true
+            left_group:setLabel(str)
         end
         ::continue::
     end
@@ -869,48 +956,26 @@ function Manipulator:init()
             subviews={
                 widgets.WrappedLabel{
                     frame={t=0, l=0},
-                    text_to_wrap='Use arrow keys or middle click drag to navigate cells. Left click or ENTER to toggle current cell.',
-                },
-                widgets.Label{
-                    frame={b=2, l=0},
-                    text='Current column:',
+                    text_to_wrap='Use arrow keys or middle click drag to navigate cells. Left click or ENTER to toggle cell.',
                 },
                 widgets.HotkeyLabel{
-                    frame={b=2, l=17},
+                    frame={b=2, l=0},
                     auto_width=true,
                     label='Sort/reverse sort',
                     key='CUSTOM_SHIFT_S',
                     on_activate=function() self.subviews.sheet:sort_by_current_col() end,
                 },
                 widgets.HotkeyLabel{
-                    frame={b=2, l=39},
+                    frame={b=2, l=22},
                     auto_width=true,
-                    label='Hide',
+                    label='Hide column',
                     key='CUSTOM_SHIFT_H',
                     on_activate=function() self.subviews.sheet:hide_current_col() end,
                 },
-                widgets.Label{
-                    frame={b=1, l=0},
-                    text='Current group:',
-                },
                 widgets.HotkeyLabel{
-                    frame={b=1, l=17},
+                    frame={b=2, l=38},
                     auto_width=true,
-                    label='Prev group',
-                    key='CUSTOM_CTRL_Y',
-                    on_activate=function() self.subviews.sheet:zoom_to_prev_group() end,
-                },
-                widgets.HotkeyLabel{
-                    frame={b=1, l=37},
-                    auto_width=true,
-                    label='Next group',
-                    key='CUSTOM_CTRL_T',
-                    on_activate=function() self.subviews.sheet:zoom_to_next_group() end,
-                },
-                widgets.HotkeyLabel{
-                    frame={b=1, l=57},
-                    auto_width=true,
-                    label='Hide',
+                    label='Hide group',
                     key='CUSTOM_CTRL_H',
                     on_activate=function() self.subviews.sheet:hide_current_col_group() end,
                 },
