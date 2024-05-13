@@ -369,6 +369,7 @@ end
 
 function Spreadsheet:init()
     self.left_col = 1
+    self.prev_filter = ''
     self.dirty = true
 
     self.shared = {
@@ -542,10 +543,6 @@ function Spreadsheet:sort_by_current_col()
     -- TODO
 end
 
-function Spreadsheet:filter(search)
-    -- TODO
-end
-
 function Spreadsheet:zoom_to_prev_group()
     -- TODO
 end
@@ -582,27 +579,34 @@ function Spreadsheet:update_headers()
     end
 end
 
--- TODO: apply search and filtering
-function Spreadsheet:filter_units(units)
-    local unit_ids, filtered_unit_ids = {}, {}
-    for _, unit in ipairs(units) do
-        table.insert(unit_ids, unit.id)
-        table.insert(filtered_unit_ids, unit.id)
-    end
-    return unit_ids, filtered_unit_ids
-end
-
-function Spreadsheet:refresh()
+-- TODO: support column addressing for searching/filtering (e.g. "skills/Armoring:>10")
+function Spreadsheet:refresh(filter, full_refresh)
     local shared = self.shared
-    local cache = shared.cache
     shared.fault = false
     self.subviews.name.dirty = true
     for _, col in ipairs(self.cols.subviews) do
         col.dirty = true
     end
-    local units = self.get_units_fn()
-    cache.units = units
-    shared.unit_ids, shared.filtered_unit_ids = self:filter_units(units)
+    local incremental = not full_refresh and self.prev_filter and filter:startswith(self.prev_filter)
+    if not incremental then
+        local units = self.get_units_fn()
+        shared.cache.units = units
+        shared.unit_ids = utils.tabulate(function(idx) return units[idx].id end, 1, #units)
+    end
+    shared.filtered_unit_ids = copyall(shared.unit_ids)
+    if #filter > 0 then
+        local col = self.subviews.name
+        col:refresh()
+        for idx=#col.col_data,1,-1 do
+            local data = col.col_data[idx]
+            if (not utils.search_text(data, filter)) then
+                table.remove(shared.filtered_unit_ids, idx)
+            end
+        end
+        if #col.col_data ~= #shared.filtered_unit_ids then
+            col.dirty = true
+        end
+    end
     shared.sort_stack[#shared.sort_stack].col:sort()
     self.dirty = false
 end
@@ -652,7 +656,7 @@ end
 
 function Spreadsheet:render(dc)
     if self.dirty or self.shared.fault then
-        self:refresh()
+        self:refresh(self.prev_filter, true)
         self:updateLayout()
     end
     local page_top = self.list.page_top
@@ -723,7 +727,7 @@ function Manipulator:init()
             frame={l=0, t=0},
             key='FILTER',
             label_text='Search: ',
-            on_change=function(val) self.subviews.sheet:filter(val) end,
+            on_change=function(text) self.subviews.sheet:refresh(text, false) end,
         },
         widgets.Divider{
             frame={l=0, r=0, t=2, h=1},
@@ -803,8 +807,7 @@ function Manipulator:init()
                     end,
                     key='CUSTOM_SHIFT_R',
                     on_activate=function()
-                        self.subviews.sheet:refresh()
-                        self.subviews.sheet:filter(self.subviews.search.text)
+                        self.subviews.sheet:refresh(self.subviews.search.text, true)
                     end,
                 },
             },
