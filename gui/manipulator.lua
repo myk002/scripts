@@ -262,6 +262,11 @@ function Column:hide_column()
     self.shared.refresh_headers = true
 end
 
+function Column:unhide_column()
+    self.hidden = false
+    self.shared.refresh_headers = true
+end
+
 function Column:hide_group()
     for _,col in ipairs(self.parent_view.subviews) do
         if col.group == self.group then
@@ -727,10 +732,14 @@ end
 function Spreadsheet:jump_to_group(group)
     for i, col in ipairs(self.cols.subviews) do
         if not col.hidden and col.group == group then
-            self.left_col = i
+            self:jump_to_col(i)
             break
         end
     end
+end
+
+function Spreadsheet:jump_to_col(idx)
+    self.left_col = idx
     self:updateLayout()
 end
 
@@ -857,45 +866,131 @@ function Spreadsheet:onInput(keys)
     if keys.KEYBOARD_CURSOR_LEFT then
         for idx=self.left_col-1,1,-1 do
             if not self.cols.subviews[idx].hidden then
-                self.left_col = idx
-                self:updateLayout()
+                self:jump_to_col(idx)
                 break
             end
         end
     elseif keys.KEYBOARD_CURSOR_LEFT_FAST then
         local remaining = self:get_num_visible_cols()
+        local target_col = self.left_col
         for idx=self.left_col-1,1,-1 do
             if not self.cols.subviews[idx].hidden then
                 remaining = remaining - 1
-                self.left_col = idx
+                target_col = idx
                 if remaining == 0 then
                     break
                 end
             end
         end
-        self:updateLayout()
+        self:jump_to_col(target_col)
     elseif keys.KEYBOARD_CURSOR_RIGHT then
         for idx=self.left_col+1,#self.cols.subviews do
             if not self.cols.subviews[idx].hidden then
-                self.left_col = idx
-                self:updateLayout()
+                self:jump_to_col(idx)
                 break
             end
         end
     elseif keys.KEYBOARD_CURSOR_RIGHT_FAST then
         local remaining = self:get_num_visible_cols()
+        local target_col = self.left_col
         for idx=self.left_col+1,#self.cols.subviews do
             if not self.cols.subviews[idx].hidden then
                 remaining = remaining - 1
-                self.left_col = idx
+                target_col = idx
                 if remaining == 0 then
                     break
                 end
             end
         end
-        self:updateLayout()
+        self:jump_to_col(target_col)
     end
     return Spreadsheet.super.onInput(self, keys)
+end
+
+------------------------
+-- QuickMenu
+--
+
+QuickMenu = defclass(QuickMenu, widgets.Panel)
+QuickMenu.ATTRS{
+    frame_style=gui.FRAME_INTERIOR,
+    frame_background=gui.CLEAR_PEN,
+    visible=false,
+    multiselect=false,
+    label=DEFAULT_NIL,
+    choices_fn=DEFAULT_NIL,
+}
+
+function QuickMenu:init()
+    self:addviews{
+        widgets.Label{
+            frame={t=0, l=0},
+            text=self.label,
+        },
+        widgets.FilteredList{
+            view_id='list',
+            frame={t=2, l=0, b=self.multiselect and 3 or 0},
+            on_submit=function(_, choice)
+                choice.fn()
+                self:hide()
+            end,
+            on_submit2=self.multiselect and function(_, choice)
+                choice.fn()
+                local list = self.subviews.list
+                local filter = list:getFilter()
+                list:setChoices(self.choices_fn(), list:getSelected())
+                list:setFilter(filter)
+            end or nil,
+        },
+        widgets.Label{
+            frame={b=1, l=0},
+            text='Shift click to select multiple.',
+            visible=self.multiselect,
+        },
+        widgets.HotkeyLabel{
+            frame={b=0, l=0},
+            key='CUSTOM_CTRL_A',
+            label='Select all',
+            visible=self.multiselect,
+            on_activate=function()
+                local list = self.subviews.list
+                for _,choice in ipairs(list:getVisibleChoices()) do
+                    choice.fn()
+                end
+                local filter = list:getFilter()
+                list:setChoices(self.choices_fn(), list:getSelected())
+                list:setFilter(filter)
+            end,
+        },
+    }
+end
+
+function QuickMenu:show()
+    self.prev_focus_owner = self.focus_group.cur
+    self.visible = true
+    local list = self.subviews.list
+    list.edit:setText('')
+    list.edit:setFocus(true)
+    list:setChoices(self.choices_fn())
+end
+
+function QuickMenu:hide()
+    self.visible = false
+    if self.prev_focus_owner then
+        self.prev_focus_owner:setFocus(true)
+    end
+end
+
+function QuickMenu:onInput(keys)
+    if ColumnMenu.super.onInput(self, keys) then
+        return true
+    end
+    if keys._MOUSE_R then
+        self:hide()
+    elseif keys._MOUSE_L and not self:getMouseFramePos() then
+        self:hide()
+    end
+    return true
 end
 
 ------------------------
@@ -968,16 +1063,30 @@ function Manipulator:init()
                 widgets.HotkeyLabel{
                     frame={b=2, l=22},
                     auto_width=true,
+                    label='Jump to column',
+                    key='CUSTOM_CTRL_G',
+                    on_activate=function() self.subviews.quick_jump_menu:show() end,
+                },
+                widgets.HotkeyLabel{
+                    frame={b=1, l=0},
+                    auto_width=true,
                     label='Hide column',
                     key='CUSTOM_SHIFT_H',
                     on_activate=function() self.subviews.sheet:hide_current_col() end,
                 },
                 widgets.HotkeyLabel{
-                    frame={b=2, l=38},
+                    frame={b=1, l=22},
                     auto_width=true,
                     label='Hide group',
                     key='CUSTOM_CTRL_H',
                     on_activate=function() self.subviews.sheet:hide_current_col_group() end,
+                },
+                widgets.HotkeyLabel{
+                    frame={b=1, l=46},
+                    auto_width=true,
+                    label='Unhide column',
+                    key='CUSTOM_SHIFT_U',
+                    on_activate=function() self.subviews.unhide_menu:show() end,
                 },
                 widgets.HotkeyLabel{
                     frame={b=0, l=0},
@@ -994,6 +1103,41 @@ function Manipulator:init()
                     end,
                 },
             },
+        },
+        QuickMenu{
+            view_id='quick_jump_menu',
+            frame={b=0, w=35, h=25},
+            label='Jump to column:',
+            choices_fn=function()
+                local choices = {}
+                for idx,col in ipairs(self.subviews.sheet.cols.subviews) do
+                    if col.hidden then goto continue end
+                    table.insert(choices, {
+                        text=('%s/%s'):format(col.group, col.label),
+                        fn=function() self.subviews.sheet:jump_to_col(idx) end,
+                    })
+                    ::continue::
+                end
+                return choices
+            end,
+        },
+        QuickMenu{
+            view_id='unhide_menu',
+            frame={b=0, w=35, h=25},
+            multiselect=true,
+            label='Unhide column:',
+            choices_fn=function()
+                local choices = {}
+                for idx,col in ipairs(self.subviews.sheet.cols.subviews) do
+                    if not col.hidden then goto continue end
+                    table.insert(choices, {
+                        text=('%s/%s'):format(col.group, col.label),
+                        fn=function() self.subviews.sheet.cols.subviews[idx]:unhide_column() end,
+                    })
+                    ::continue::
+                end
+                return choices
+            end,
         },
     }
 end
