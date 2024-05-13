@@ -84,7 +84,6 @@ Column.ATTRS{
     count_fn=DEFAULT_NIL,
     cmp_fn=DEFAULT_NIL,
     choice_fn=DEFAULT_NIL,
-    on_select=DEFAULT_NIL,
 }
 
 function Column:init()
@@ -127,13 +126,17 @@ function Column:init()
         widgets.List{
             view_id='col_list',
             frame={t=10, l=0, w=self.data_width},
-            on_select=self.on_select,
+            on_submit=self:callback('on_select'),
         },
     }
 
     self.subviews.col_list.scrollbar.visible = false
     self.col_data = {}
     self.dirty = true
+end
+
+-- overridden by subclasses
+function Column:on_select(idx, choice)
 end
 
 function Column:sort(make_primary)
@@ -199,6 +202,14 @@ function Column:get_units()
     return units
 end
 
+function Column:get_sorted_unit_id(idx)
+    return self.shared.filtered_unit_ids[self.shared.sort_order[idx]]
+end
+
+function Column:get_sorted_data(idx)
+    return self.col_data[self.shared.sort_order[idx]]
+end
+
 function Column:refresh()
     local col_data, choices = {}, {}
     local current, total = 0, 0
@@ -209,7 +220,7 @@ function Column:refresh()
         if unit.id == self.shared.filtered_unit_ids[next_id_idx] then
             local idx = next_id_idx
             table.insert(col_data, data)
-            table.insert(choices, self.choice_fn(function() return col_data[self.shared.sort_order[idx]] end))
+            table.insert(choices, self.choice_fn(function() return self:get_sorted_data(idx) end))
             current = current + val
             next_id_idx = next_id_idx + 1
         end
@@ -312,19 +323,17 @@ ToggleColumn = defclass(ToggleColumn, Column)
 ToggleColumn.ATTRS{
     count_fn=toggle_count,
     choice_fn=toggle_choice,
+    toggle_fn=DEFAULT_NIL,
 }
 
-------------------------
--- TagColumn
---
-
-local function tag_select(_, choice)
+function ToggleColumn:on_select(idx, choice)
+    if not self.toggle_fn then return end
+    local unit_id = self:get_sorted_unit_id(idx)
+    local prev_val = self:get_sorted_data(idx)
+    print(idx, unit_id, dfhack.units.getReadableName(df.unit.find(unit_id)), prev_val)
+    self.toggle_fn(unit_id, prev_val)
+    self.dirty = true
 end
-
-TagColumn = defclass(TagColumn, ToggleColumn)
-TagColumn.ATTRS{
-    on_select=tag_select,
-}
 
 ------------------------
 -- Spreadsheet
@@ -368,7 +377,16 @@ function Spreadsheet:init()
             group='tags',
             label='Favorites',
             shared=self.shared,
-            data_fn=function(unit) return utils.binsearch(ensure_key(config.data, 'favorites'), unit.id) end,
+            data_fn=function(unit) return utils.binsearch(ensure_key(state, 'favorites'), unit.id) and true or false end,
+            toggle_fn=function(unit_id, prev_val)
+                local fav_vec = ensure_key(state, 'favorites')
+                if prev_val then
+                    utils.erase_sorted(fav_vec, unit_id)
+                else
+                    utils.insert_sorted(fav_vec, unit_id)
+                end
+                persist_state()
+            end,
         },
         DataColumn{
             group='summary',
@@ -390,7 +408,20 @@ function Spreadsheet:init()
                                 elseif ordered_data < -999 then
                                     return ('%3dk'):format(-(-ordered_data // 1000))
                                 end
-                                return tostring(ordered_data)
+                                return ('%4d'):format(ordered_data)
+                            end,
+                            pen=function()
+                                local ordered_data = get_ordered_data_fn()
+                                local level = dfhack.units.getStressCategoryRaw(ordered_data)
+                                local is_graphics = dfhack.screen.inGraphicsMode()
+                                -- match colors of stress faces depending on mode
+                                if level == 0 then return COLOR_RED end
+                                if level == 1 then return COLOR_LIGHTRED end
+                                if level == 2 then return is_graphics and COLOR_BROWN or COLOR_YELLOW end
+                                if level == 3 then return is_graphics and COLOR_YELLOW or COLOR_WHITE end
+                                if level == 4 then return is_graphics and COLOR_CYAN or COLOR_GREEN end
+                                if level == 5 then return is_graphics and COLOR_GREEN or COLOR_LIGHTGREEN end
+                                return is_graphics and COLOR_LIGHTGREEN or COLOR_LIGHTCYAN
                             end,
                         },
                     },
