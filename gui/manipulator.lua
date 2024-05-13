@@ -141,12 +141,15 @@ end
 -- Column
 --
 
+local DEFAULT_DATA_WIDTH = 4
+local DEFAULT_COL_OVERSCAN = 14
+
 Column = defclass(Column, widgets.Panel)
 Column.ATTRS{
     label=DEFAULT_NIL,
     group='',
     label_inset=0,
-    data_width=4,
+    data_width=DEFAULT_DATA_WIDTH,
     hidden=DEFAULT_NIL,
     shared=DEFAULT_NIL,
     data_fn=DEFAULT_NIL,
@@ -161,7 +164,7 @@ local CH_UP = string.char(30)
 local CH_DN = string.char(31)
 
 function Column:init()
-    self.frame = utils.assign({t=0, b=0, l=0, w=14}, self.frame or {})
+    self.frame = utils.assign({t=0, b=0, l=0, w=DEFAULT_COL_OVERSCAN}, self.frame or {})
 
     local function show_menu()
         self.subviews.col_menu:show()
@@ -767,7 +770,27 @@ function Spreadsheet:jump_to_group(group)
 end
 
 function Spreadsheet:jump_to_col(idx)
+    idx = math.min(idx, #self.cols.subviews)
+    idx = math.max(idx, 1)
     self.left_col = idx
+    if self.cols.subviews[idx].hidden then
+        local found = false
+        for shifted_idx=self.left_col-1,1,-1 do
+            if not self.cols.subviews[shifted_idx].hidden then
+                self.left_col = shifted_idx
+                found = true
+                break
+            end
+        end
+        if not found then
+            for shifted_idx=self.left_col+1,#self.cols.subviews do
+                if not self.cols.subviews[shifted_idx].hidden then
+                    self.left_col = shifted_idx
+                    break
+                end
+            end
+        end
+    end
     self:updateLayout()
 end
 
@@ -868,7 +891,11 @@ function Spreadsheet:render(dc)
         if self.shared.refresh_headers then
             self:update_headers()
         end
-        self:updateLayout()
+        if self.cols.subviews[self.left_col].hidden then
+            self:jump_to_col(self.left_col)
+        else
+            self:updateLayout()
+        end
     end
     local page_top = self.namelist.page_top
     local selected = self.namelist:getSelected()
@@ -881,23 +908,16 @@ function Spreadsheet:render(dc)
 end
 
 function Spreadsheet:get_num_visible_cols()
-    local count = 0
-    for _,col in ipairs(self.cols.subviews) do
-        if col.visible then
-            count = count + 1
-        end
-    end
-    return count
+    local rect = self.frame_rect
+    if not rect then return 1 end
+    local other_width = self.subviews.name.data_width + (DEFAULT_COL_OVERSCAN - DEFAULT_DATA_WIDTH)
+    local width = rect.width - other_width
+    return width // (DEFAULT_DATA_WIDTH + 1)
 end
 
 function Spreadsheet:onInput(keys)
     if keys.KEYBOARD_CURSOR_LEFT then
-        for idx=self.left_col-1,1,-1 do
-            if not self.cols.subviews[idx].hidden then
-                self:jump_to_col(idx)
-                break
-            end
-        end
+        self:jump_to_col(self.left_col-1)
     elseif keys.KEYBOARD_CURSOR_LEFT_FAST then
         local remaining = self:get_num_visible_cols()
         local target_col = self.left_col
@@ -1253,14 +1273,14 @@ ManipulatorOverlay.ATTRS{
     default_pos={x=50, y=-6},
     default_enabled=true,
     viewscreens='dwarfmode/Info/CREATURES/CITIZEN',
-    frame={w=34, h=1},
+    frame={w=35, h=1},
 }
 
 function ManipulatorOverlay:init()
     self:addviews{
         widgets.TextButton{
             frame={t=0, l=0},
-            label='DFHack citizen interface',
+            label='DFHack citizen management',
             key='CUSTOM_CTRL_N',
             on_activate=function() dfhack.run_script('gui/manipulator') end,
         },
