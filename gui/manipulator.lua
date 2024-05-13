@@ -472,6 +472,7 @@ local function toggle_choice(get_ordered_data_fn)
             get_enabled_button_token(ENABLED_PEN_LEFT, DISABLED_PEN_LEFT),
             get_enabled_button_token(ENABLED_PEN_CENTER, DISABLED_PEN_CENTER),
             get_enabled_button_token(ENABLED_PEN_RIGHT, DISABLED_PEN_RIGHT),
+            ' ',
         },
     }
 end
@@ -562,6 +563,7 @@ function Spreadsheet:init()
         sort_stack={},
         sort_order={},  -- list of indices into filtered_unit_ids (or cache.filtered_units)
         cache={},       -- cached pointers; reset at end of frame
+        cur_col=nil,
         refresh_units=true,
         refresh_headers=true,
     }
@@ -718,6 +720,9 @@ function Spreadsheet:init()
     self.shared.sort_stack[1] = {col=self.subviews.name, rev=false}
     self.shared.sort_stack[2] = {col=self.subviews.favorites, rev=false}
 
+    -- set initial selection
+    self:set_cur_col(self.subviews.favorites)
+
     self.namelist = self.subviews.name.subviews.col_list
     self:addviews{
             widgets.Scrollbar{
@@ -730,6 +735,16 @@ function Spreadsheet:init()
     self.namelist:setFocus(true)
 end
 
+local CURSOR_PEN = dfhack.pen.parse{fg=COLOR_GREY, bg=COLOR_CYAN}
+
+function Spreadsheet:set_cur_col(col)
+    if self.shared.cur_col then
+        self.shared.cur_col.subviews.col_list.cursor_pen = COLOR_LIGHTCYAN
+    end
+    self.shared.cur_col = col
+    col.subviews.col_list.cursor_pen = CURSOR_PEN
+end
+
 function Spreadsheet:zoom_to_unit()
     local idx = self.namelist:getSelected()
     if not idx then return end
@@ -739,25 +754,62 @@ function Spreadsheet:zoom_to_unit()
         xyz2pos(dfhack.units.getPosition(unit)), true, true)
 end
 
--- TODO these are dependent on having a column cursor
 function Spreadsheet:zoom_to_col_source()
-    -- TODO
+    if not self.shared.cur_col or not self.shared.cur_col.zoom_fn then return end
+    self.shared.cur_col.zoom_fn()
 end
 
 function Spreadsheet:sort_by_current_col()
-    -- TODO
+    if not self.shared.cur_col then return end
+    self.shared.cur_col:sort(true)
 end
 
 function Spreadsheet:hide_current_col()
-    -- TODO
+    if not self.shared.cur_col then return end
+    self.shared.cur_col:hide_column()
 end
 
 function Spreadsheet:hide_current_col_group()
-    -- TODO
+    if not self.shared.cur_col then return end
+    self.shared.cur_col:hide_group()
 end
 
+-- utf8-ize and, if needed, quote and escape
+local function make_csv_cell(fmt, ...)
+    local str = fmt:format(...)
+    str = dfhack.df2utf(str)
+    if str:find('[,"]') then
+        str = str:gsub('"', '""')
+        str = ('"%s"'):format(str)
+    end
+    return str
+end
+
+-- exports visible data, in the current sort, to a .csv file
 function Spreadsheet:export()
-    -- TODO
+    local file = io.open('manipulator.csv', 'a+')
+    if not file then
+        dfhack.printerr('could not open export file: manipulator.csv')
+        return
+    end
+    file:write(make_csv_cell('%s,', self.subviews.name.label))
+    for _, col in ipairs(self.cols.subviews) do
+        if col.hidden then goto continue end
+        file:write(make_csv_cell('%s/%s,', col.group, col.label))
+        ::continue::
+    end
+    file:write(NEWLINE)
+    for row=1,#self.shared.filtered_unit_ids do
+        file:write(make_csv_cell('%s', self.subviews.name:get_sorted_data(row)))
+        file:write(',')
+        for _, col in ipairs(self.cols.subviews) do
+            if col.hidden then goto continue end
+            file:write(make_csv_cell('%s,', col:get_sorted_data(row) or ''))
+            ::continue::
+        end
+        file:write(NEWLINE)
+    end
+    file:close()
 end
 
 function Spreadsheet:jump_to_group(group)
@@ -1107,7 +1159,6 @@ function Manipulator:init()
                     label='Sort/reverse sort',
                     key='CUSTOM_SHIFT_S',
                     on_activate=function() self.subviews.sheet:sort_by_current_col() end,
-                    enabled=false,
                 },
                 widgets.HotkeyLabel{
                     frame={b=2, l=22},
@@ -1122,7 +1173,6 @@ function Manipulator:init()
                     label='Export to csv',
                     key='CUSTOM_SHIFT_E',
                     on_activate=function() self.subviews.sheet:export() end,
-                    enabled=false,
                 },
                 widgets.HotkeyLabel{
                     frame={b=1, l=0},
@@ -1130,7 +1180,6 @@ function Manipulator:init()
                     label='Hide column',
                     key='CUSTOM_SHIFT_H',
                     on_activate=function() self.subviews.sheet:hide_current_col() end,
-                    enabled=false,
                 },
                 widgets.HotkeyLabel{
                     frame={b=1, l=22},
@@ -1138,7 +1187,6 @@ function Manipulator:init()
                     label='Hide group',
                     key='CUSTOM_CTRL_H',
                     on_activate=function() self.subviews.sheet:hide_current_col_group() end,
-                    enabled=false,
                 },
                 widgets.HotkeyLabel{
                     frame={b=1, l=46},
@@ -1160,7 +1208,6 @@ function Manipulator:init()
                     label='Zoom to source',
                     key='CUSTOM_CTRL_Z',
                     on_activate=function() self.subviews.sheet:zoom_to_col_source() end,
-                    enabled=false,
                 },
                 widgets.HotkeyLabel{
                     frame={b=0, l=46},
