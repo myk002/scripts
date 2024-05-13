@@ -330,7 +330,6 @@ function ToggleColumn:on_select(idx, choice)
     if not self.toggle_fn then return end
     local unit_id = self:get_sorted_unit_id(idx)
     local prev_val = self:get_sorted_data(idx)
-    print(idx, unit_id, dfhack.units.getReadableName(df.unit.find(unit_id)), prev_val)
     self.toggle_fn(unit_id, prev_val)
     self.dirty = true
 end
@@ -446,7 +445,8 @@ function Spreadsheet:init()
         end
     end
 
-    for _, wd in ipairs(df.global.plotinfo.labor_info.work_details) do
+    local work_details = df.global.plotinfo.labor_info.work_details
+    for _, wd in ipairs(work_details) do
         cols:addviews{
             ToggleColumn{
                 group='work details',
@@ -455,34 +455,43 @@ function Spreadsheet:init()
                 data_fn=function(unit)
                     return utils.binsearch(wd.assigned_units, unit.id) and true or false
                 end,
+                toggle_fn=function(unit_id, prev_val)
+                    -- TODO: poke DF to actually apply the work details to units
+                    if prev_val then
+                        utils.erase_sorted(wd.assigned_units, unit_id)
+                    else
+                        utils.insert_sorted(wd.assigned_units, unit_id)
+                    end
+                end,
             }
         }
     end
 
-    for _, workshop in ipairs(df.global.world.buildings.other.FURNACE_ANY) do
-        cols:addviews{
-            ToggleColumn{
-                group='workshops',
-                label=get_workshop_label(workshop, df.furnace_type, df.global.world.raws.buildings.furnaces),
-                shared=self.shared,
-                data_fn=function(unit)
-                    return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
-                end,
+    local function add_workshops(vec, type_enum, type_defs)
+        for _, workshop in ipairs(vec) do
+            cols:addviews{
+                ToggleColumn{
+                    group='workshops',
+                    label=get_workshop_label(workshop, type_enum, type_defs),
+                    shared=self.shared,
+                    data_fn=function(unit)
+                        return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
+                    end,
+                    toggle_fn=function(unit_id, prev_val)
+                        if prev_val then
+                            utils.erase_sorted(workshop.profile.permitted_workers, unit_id)
+                        else
+                            -- there can be only one
+                            workshop.profile.permitted_workers:resize(0)
+                            workshop.profile.permitted_workers:insert('#', unit_id)
+                        end
+                    end,
+                }
             }
-        }
+        end
     end
-    for _, workshop in ipairs(df.global.world.buildings.other.WORKSHOP_ANY) do
-        cols:addviews{
-            ToggleColumn{
-                group='workshops',
-                label=get_workshop_label(workshop, df.workshop_type, df.global.world.raws.buildings.workshops),
-                shared=self.shared,
-                data_fn=function(unit)
-                    return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
-                end,
-            }
-        }
-    end
+    add_workshops(df.global.world.buildings.other.FURNACE_ANY, df.furnace_type, df.global.world.raws.buildings.furnaces)
+    add_workshops(df.global.world.buildings.other.WORKSHOP_ANY, df.workshop_type, df.global.world.raws.buildings.workshops)
 
     self:addviews{
         widgets.TextButton{
