@@ -125,7 +125,7 @@ function Column:init()
         },
         widgets.List{
             view_id='col_list',
-            frame={t=10, l=0, w=self.data_width},
+            frame={t=10, l=0, w=self.data_width+2}, -- +2 for the invisible scrollbar
             on_submit=self:callback('on_select'),
         },
     }
@@ -319,6 +319,18 @@ local function toggle_choice(get_ordered_data_fn)
     }
 end
 
+local function toggle_sorted_vec_data(vec, unit)
+    return utils.binsearch(vec, unit.id) and true or false
+end
+
+local function toggle_sorted_vec(vec, unit_id, prev_val)
+    if prev_val then
+        utils.erase_sorted(vec, unit_id)
+    else
+        utils.insert_sorted(vec, unit_id)
+    end
+end
+
 ToggleColumn = defclass(ToggleColumn, Column)
 ToggleColumn.ATTRS{
     count_fn=toggle_count,
@@ -376,14 +388,9 @@ function Spreadsheet:init()
             group='tags',
             label='Favorites',
             shared=self.shared,
-            data_fn=function(unit) return utils.binsearch(ensure_key(state, 'favorites'), unit.id) and true or false end,
+            data_fn=curry(toggle_sorted_vec_data, state.favorites),
             toggle_fn=function(unit_id, prev_val)
-                local fav_vec = ensure_key(state, 'favorites')
-                if prev_val then
-                    utils.erase_sorted(fav_vec, unit_id)
-                else
-                    utils.insert_sorted(fav_vec, unit_id)
-                end
+                toggle_sorted_vec(state.favorites, unit_id, prev_val)
                 persist_state()
             end,
         },
@@ -452,16 +459,10 @@ function Spreadsheet:init()
                 group='work details',
                 label=wd.name,
                 shared=self.shared,
-                data_fn=function(unit)
-                    return utils.binsearch(wd.assigned_units, unit.id) and true or false
-                end,
+                data_fn=curry(toggle_sorted_vec_data, wd.assigned_units),
                 toggle_fn=function(unit_id, prev_val)
+                    toggle_sorted_vec(wd.assigned_units, unit_id, prev_val)
                     -- TODO: poke DF to actually apply the work details to units
-                    if prev_val then
-                        utils.erase_sorted(wd.assigned_units, unit_id)
-                    else
-                        utils.insert_sorted(wd.assigned_units, unit_id)
-                    end
                 end,
             }
         }
@@ -474,17 +475,13 @@ function Spreadsheet:init()
                     group='workshops',
                     label=get_workshop_label(workshop, type_enum, type_defs),
                     shared=self.shared,
-                    data_fn=function(unit)
-                        return utils.binsearch(workshop.profile.permitted_workers, unit.id) and true or false
-                    end,
+                    data_fn=curry(toggle_sorted_vec_data, workshop.profile.permitted_workers),
                     toggle_fn=function(unit_id, prev_val)
-                        if prev_val then
-                            utils.erase_sorted(workshop.profile.permitted_workers, unit_id)
-                        else
+                        if not prev_val then
                             -- there can be only one
                             workshop.profile.permitted_workers:resize(0)
-                            workshop.profile.permitted_workers:insert('#', unit_id)
                         end
+                        toggle_sorted_vec(workshop.profile.permitted_workers, unit_id, prev_val)
                     end,
                 }
             }
