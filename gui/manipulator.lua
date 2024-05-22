@@ -262,6 +262,7 @@ function Column:on_select(idx, choice)
     -- avoiding an infinite loop
     local namelist = self.parent_view.parent_view.namelist
     if namelist then
+        self.shared.set_cursor_col_fn(self)
         namelist:setSelected(idx)
     end
 end
@@ -563,7 +564,8 @@ function Spreadsheet:init()
         sort_stack={},
         sort_order={},  -- list of indices into filtered_unit_ids (or cache.filtered_units)
         cache={},       -- cached pointers; reset at end of frame
-        cur_col=nil,
+        cursor_col=nil,
+        set_cursor_col_fn=self:callback('set_cursor_col'),
         refresh_units=true,
         refresh_headers=true,
     }
@@ -716,12 +718,17 @@ function Spreadsheet:init()
         cols,
     }
 
+    -- teach each column about its relative position so we can track cursor movement
+    for idx, col in ipairs(cols) do
+        col.idx = idx
+    end
+
     -- set up initial sort: primary favorites, secondary name
     self.shared.sort_stack[1] = {col=self.subviews.name, rev=false}
     self.shared.sort_stack[2] = {col=self.subviews.favorites, rev=false}
 
-    -- set initial selection
-    self:set_cur_col(self.subviews.favorites)
+    -- set initial keyboard cursor position
+    self:set_cursor_col(self.subviews.favorites)
 
     self.namelist = self.subviews.name.subviews.col_list
     self:addviews{
@@ -737,11 +744,11 @@ end
 
 local CURSOR_PEN = dfhack.pen.parse{fg=COLOR_GREY, bg=COLOR_CYAN}
 
-function Spreadsheet:set_cur_col(col)
-    if self.shared.cur_col then
-        self.shared.cur_col.subviews.col_list.cursor_pen = COLOR_LIGHTCYAN
+function Spreadsheet:set_cursor_col(col)
+    if self.shared.cursor_col then
+        self.shared.cursor_col.subviews.col_list.cursor_pen = COLOR_LIGHTCYAN
     end
-    self.shared.cur_col = col
+    self.shared.cursor_col = col
     col.subviews.col_list.cursor_pen = CURSOR_PEN
 end
 
@@ -755,23 +762,23 @@ function Spreadsheet:zoom_to_unit()
 end
 
 function Spreadsheet:zoom_to_col_source()
-    if not self.shared.cur_col or not self.shared.cur_col.zoom_fn then return end
-    self.shared.cur_col.zoom_fn()
+    if not self.shared.cursor_col or not self.shared.cursor_col.zoom_fn then return end
+    self.shared.cursor_col.zoom_fn()
 end
 
 function Spreadsheet:sort_by_current_col()
-    if not self.shared.cur_col then return end
-    self.shared.cur_col:sort(true)
+    if not self.shared.cursor_col then return end
+    self.shared.cursor_col:sort(true)
 end
 
 function Spreadsheet:hide_current_col()
-    if not self.shared.cur_col then return end
-    self.shared.cur_col:hide_column()
+    if not self.shared.cursor_col then return end
+    self.shared.cursor_col:hide_column()
 end
 
 function Spreadsheet:hide_current_col_group()
-    if not self.shared.cur_col then return end
-    self.shared.cur_col:hide_group()
+    if not self.shared.cursor_col then return end
+    self.shared.cursor_col:hide_group()
 end
 
 -- utf8-ize and, if needed, quote and escape
